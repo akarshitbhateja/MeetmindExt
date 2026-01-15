@@ -26,27 +26,46 @@ export default function NewMeeting() {
   };
 
   return (
-    <div className="p-8 max-w-2xl">
-      <h1 className="text-2xl font-bold mb-6">Pre-Meeting Setup</h1>
+    <div className="min-h-screen bg-black text-white px-10 py-8">
+      <div className="max-w-2xl">
+        <h1 className="text-3xl font-semibold mb-2">
+          Pre-Meeting Setup
+        </h1>
+        <p className="text-neutral-400 mb-8 text-sm">
+          Define context before the meeting starts
+        </p>
 
-      <input
-        placeholder="Meeting Title"
-        className="w-full p-3 mb-4 bg-neutral-900 rounded"
-        onChange={(e) => setTitle(e.target.value)}
-      />
+        <div className="space-y-6 bg-neutral-900/50 border border-neutral-800 rounded-2xl p-8">
+          <div>
+            <label className="text-sm text-neutral-400">
+              Meeting Title
+            </label>
+            <input
+              className="w-full mt-2 p-3 bg-black border border-neutral-800 rounded-xl focus:outline-none focus:border-green-700"
+              placeholder="Weekly Product Sync"
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </div>
 
-      <textarea
-        placeholder="Meeting Agenda"
-        className="w-full p-3 mb-6 bg-neutral-900 rounded h-40"
-        onChange={(e) => setAgenda(e.target.value)}
-      />
+          <div>
+            <label className="text-sm text-neutral-400">
+              Agenda
+            </label>
+            <textarea
+              className="w-full mt-2 p-3 bg-black border border-neutral-800 rounded-xl h-40 focus:outline-none focus:border-green-700"
+              placeholder="Topics, goals, decisions to be made…"
+              onChange={(e) => setAgenda(e.target.value)}
+            />
+          </div>
 
-      <button
-        onClick={saveMeeting}
-        className="bg-green-700 px-6 py-3 rounded-lg"
-      >
-        Save & Continue
-      </button>
+          <button
+            onClick={saveMeeting}
+            className="w-full bg-green-700 hover:bg-green-800 transition py-3 rounded-xl font-medium"
+          >
+            Save & Continue
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
