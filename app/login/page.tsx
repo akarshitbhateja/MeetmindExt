@@ -23,8 +23,8 @@ export default function LoginPage() {
   const loginWithEmail = async () => {
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      setToast({ message: "Welcome back!", type: "success" });
-      setTimeout(() => router.push("/dashboard"), 800);
+      setToast({ message: "Welcome back", type: "success" });
+      setTimeout(() => router.push("/dashboard"), 700);
     } catch (err: any) {
       setToast({ message: err.message, type: "error" });
     }
@@ -35,7 +35,7 @@ export default function LoginPage() {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
       setToast({ message: "Signed in successfully", type: "success" });
-      setTimeout(() => router.push("/dashboard"), 800);
+      setTimeout(() => router.push("/dashboard"), 700);
     } catch (err: any) {
       setToast({ message: err.message, type: "error" });
     }
@@ -43,7 +43,7 @@ export default function LoginPage() {
 
   const resetPassword = async () => {
     if (!email) {
-      setToast({ message: "Enter your email first", type: "error" });
+      setToast({ message: "Enter email to reset password", type: "error" });
       return;
     }
     await sendPasswordResetEmail(auth, email);
@@ -60,28 +60,28 @@ export default function LoginPage() {
         />
       )}
 
-      <div className="w-[400px] rounded-2xl border border-neutral-800 bg-black/70 backdrop-blur-xl p-8">
+      <div className="w-[380px] border border-neutral-800 bg-neutral-900/60 backdrop-blur-xl p-8 rounded-xl animate-fade-up">
         <h1 className="text-3xl font-semibold text-center mb-1">MeetMind</h1>
-        <p className="text-center text-neutral-400 mb-8 text-sm">
-          Sign in to continue
+        <p className="text-center text-neutral-400 mb-7 text-sm">
+          Sign in to your workspace
         </p>
 
         <div className="space-y-4">
           <input
             type="email"
             placeholder="Email"
-            className="w-full p-3 rounded-xl bg-black border border-neutral-800 focus:border-green-700 outline-none"
+            className="w-full p-3 rounded-lg bg-black border border-neutral-800 focus:border-green-700 outline-none"
             onChange={(e) => setEmail(e.target.value)}
           />
 
           <input
             type="password"
             placeholder="Password"
-            className="w-full p-3 rounded-xl bg-black border border-neutral-800 focus:border-green-700 outline-none"
+            className="w-full p-3 rounded-lg bg-black border border-neutral-800 focus:border-green-700 outline-none"
             onChange={(e) => setPassword(e.target.value)}
           />
 
-          <div className="flex justify-between text-sm text-neutral-400">
+          <div className="flex justify-end text-sm text-neutral-400">
             <button onClick={resetPassword} className="hover:text-green-400">
               Forgot password?
             </button>
@@ -89,7 +89,7 @@ export default function LoginPage() {
 
           <button
             onClick={loginWithEmail}
-            className="w-full bg-green-600 hover:bg-green-700 transition py-3 rounded-xl font-medium"
+            className="w-full bg-green-700 hover:bg-green-800 transition py-3 rounded-lg font-medium"
           >
             Sign in
           </button>
@@ -102,9 +102,9 @@ export default function LoginPage() {
 
           <button
             onClick={loginWithGoogle}
-            className="w-full border border-neutral-800 py-3 rounded-xl hover:border-green-700 transition"
+            className="w-full border border-neutral-800 py-3 rounded-lg hover:border-green-700 transition"
           >
-            Sign in with Google
+            Continue with Google
           </button>
 
           <p className="text-sm text-center text-neutral-400 mt-4">

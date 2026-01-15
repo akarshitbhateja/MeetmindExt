@@ -18,8 +18,8 @@ export default function SignupPage() {
   const signup = async () => {
     try {
       await createUserWithEmailAndPassword(auth, email, password);
-      setToast({ message: "Account created successfully", type: "success" });
-      setTimeout(() => router.push("/dashboard"), 800);
+      setToast({ message: "Account created", type: "success" });
+      setTimeout(() => router.push("/dashboard"), 700);
     } catch (err: any) {
       setToast({ message: err.message, type: "error" });
     }
@@ -35,29 +35,29 @@ export default function SignupPage() {
         />
       )}
 
-      <div className="w-[400px] rounded-2xl border border-neutral-800 bg-neutral-900/60 p-8">
+      <div className="w-[380px] border border-neutral-800 bg-neutral-900/60 p-8 rounded-xl animate-fade-up">
         <h1 className="text-3xl font-semibold text-center mb-6">
-          Create Account
+          Create account
         </h1>
 
         <div className="space-y-4">
           <input
             type="email"
             placeholder="Email"
-            className="w-full p-3 rounded-xl bg-black border border-neutral-800 focus:border-green-700 outline-none"
+            className="w-full p-3 rounded-lg bg-black border border-neutral-800 focus:border-green-700 outline-none"
             onChange={(e) => setEmail(e.target.value)}
           />
 
           <input
             type="password"
             placeholder="Password"
-            className="w-full p-3 rounded-xl bg-black border border-neutral-800 focus:border-green-700 outline-none"
+            className="w-full p-3 rounded-lg bg-black border border-neutral-800 focus:border-green-700 outline-none"
             onChange={(e) => setPassword(e.target.value)}
           />
 
           <button
             onClick={signup}
-            className="w-full bg-green-600 hover:bg-green-700 transition py-3 rounded-xl font-medium"
+            className="w-full bg-green-700 hover:bg-green-800 transition py-3 rounded-lg font-medium"
           >
             Sign up
           </button>
