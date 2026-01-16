@@ -1,10 +1,4 @@
 import "./globals.css";
-import type { Metadata } from "next";
-
-export const metadata: Metadata = {
-  title: "MeetMind",
-  description: "Multimodal Meeting Copilot",
-};
 
 export default function RootLayout({
   children,
@@ -13,7 +7,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-black text-white">{children}</body>
+      <body className="app-bg text-white">{children}</body>
     </html>
   );
 }
