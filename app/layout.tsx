@@ -7,7 +7,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="app-bg text-white">{children}</body>
+      <body className="app-bg font-sans text-white">
+        {children}
+      </body>
     </html>
   );
 }
