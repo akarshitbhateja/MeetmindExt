@@ -31,14 +31,16 @@ export default function LoginPage() {
   return (
     <div className="app-bg min-h-screen flex items-center justify-center">
       <div className="card w-[420px] animate-fade">
-        <h1 className="text-3xl font-semibold text-center mb-2">
-          MeetMind
-        </h1>
-        <p className="text-sm text-neutral-400 text-center mb-6">
-          Sign in to continue
-        </p>
+        {/* HEADER LAYER */}
+        <div className="text-center mb-6">
+          <h1 className="text-3xl font-semibold mb-1">MeetMind</h1>
+          <p className="text-sm text-neutral-400">
+            Sign in to continue
+          </p>
+        </div>
 
-        <div className="space-y-4">
+        {/* INNER PANEL */}
+        <div className="card-inner space-y-4">
           <input
             className="input"
             placeholder="Email"
@@ -62,7 +64,6 @@ export default function LoginPage() {
             </button>
           </div>
 
-          {/* Primary Sign In */}
           <button
             onClick={login}
             className="btn-primary hover:brightness-110 transition"
@@ -70,25 +71,24 @@ export default function LoginPage() {
             Sign in
           </button>
 
-          {/* Divider */}
           <div className="flex items-center gap-3 text-xs text-neutral-500">
             <div className="flex-1 h-px bg-neutral-800" />
             OR
             <div className="flex-1 h-px bg-neutral-800" />
           </div>
 
-          {/* Google Button — NOW STYLED */}
           <button
             onClick={googleLogin}
-            className="w-full px-4 py-3 rounded-[8px] border border-neutral-700
-                       bg-[#070a07] text-white
-                       hover:border-green-600 hover:bg-[#0a120a]
+            className="w-full px-4 py-3 rounded-[8px]
+                       border border-neutral-700
+                       bg-[#070a07]
+                       hover:border-green-600 hover:bg-[#0b140b]
                        transition"
           >
             Continue with Google
           </button>
 
-          <p className="text-sm text-center text-neutral-400 mt-4">
+          <p className="text-sm text-center text-neutral-400 mt-2">
             Don’t have an account?{" "}
             <span
               onClick={() => router.push("/signup")}
