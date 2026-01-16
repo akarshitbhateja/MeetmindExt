@@ -1,13 +1,15 @@
 @tailwind utilities;
 
+/* Sans-serif, SaaS-grade */
 html,
 body {
   background: #050705;
   color: white;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial;
 }
 
-/* ===== BACKGROUND ===== */
+/* Background glow */
 .app-bg {
   min-height: 100vh;
   background:
@@ -16,69 +18,58 @@ body {
     #050705;
 }
 
-/* ===== CARD ===== */
+/* Card */
 .card {
   background: linear-gradient(
     180deg,
-    rgba(11,18,12,0.95),
-    rgba(7,12,8,0.95)
+    rgba(11,18,12,0.96),
+    rgba(7,12,8,0.96)
   );
-  border: 1px solid rgba(34,197,94,0.22);
-  border-radius: 14px;
-  position: relative;
-  overflow: hidden;
-}
-
-.card::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  background: radial-gradient(
-    80% 60% at 50% 0%,
-    rgba(34,197,94,0.35),
-    transparent 70%
-  );
-  opacity: 0.35;
-  pointer-events: none;
-}
-
-/* ===== INPUT ===== */
-.input {
-  background: #050705;
   border: 1px solid rgba(34,197,94,0.25);
-  border-radius: 10px;
+  border-radius: 14px;
+  padding: 2rem;
+}
+
+/* Input */
+.input {
+  width: 100%;
   padding: 12px;
+  background: #050705;
+  border: 1px solid rgba(34,197,94,0.35);
+  border-radius: 10px;
+  color: white;
+}
+
+.input::placeholder {
+  color: #9ca3af;
 }
 
 .input:focus {
-  border-color: #22c55e;
-  box-shadow: 0 0 0 1px rgba(34,197,94,0.35);
   outline: none;
+  border-color: #22c55e;
+  box-shadow: 0 0 0 1px rgba(34,197,94,0.4);
 }
 
-/* ===== BUTTON ===== */
+/* Button */
 .btn-primary {
-  background: linear-gradient(180deg, #22c55e, #16a34a);
-  color: #052e16;
-  border-radius: 10px;
+  width: 100%;
   padding: 12px;
+  background: linear-gradient(180deg, #22c55e, #16a34a);
+  border-radius: 10px;
   font-weight: 500;
+  color: #052e16;
 }
 
-/* ===== TOAST ===== */
-.toast {
-  background: #0b120c;
-  border: 1px solid rgba(34,197,94,0.35);
-  color: #86efac;
-  border-radius: 8px;
-  padding: 10px 16px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-}
-
-/* ===== ANIMATION ===== */
+/* Animation */
 @keyframes fadeUp {
-  from { opacity: 0; transform: translateY(14px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .animate-fade {
