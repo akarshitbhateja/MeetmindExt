@@ -80,29 +80,27 @@ export default function Dashboard() {
   const createGoogleCalendarEvent = async (meetingData) => {
     let token = sessionStorage.getItem('google_access_token');
 
-    // If token is missing (e.g. page refresh), re-authenticate silently to get it
     if (!token) {
       try {
-        console.log("🔄 Token missing, re-authenticating for Calendar access...");
+        console.log("🔄 Token missing, re-authenticating...");
         const result = await signInWithPopup(auth, provider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
         token = credential.accessToken;
         sessionStorage.setItem('google_access_token', token);
       } catch (e) {
         console.error("Auth failed", e);
-        alert("We need to connect to Google Calendar to schedule this. Please allow the popup.");
+        alert("We need to connect to Google Calendar to schedule this.");
         return null;
       }
     }
 
-    // Determine User's Timezone (e.g., 'Asia/Kolkata')
     const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
     const event = {
       summary: meetingData.title,
       description: `${meetingData.description}\n\n--\nScheduled via MeetMind Copilot`,
       start: {
-        dateTime: meetingData.startTime + ":00", // Add seconds for ISO format
+        dateTime: meetingData.startTime + ":00", 
         timeZone: userTimeZone,
       },
       end: {
@@ -110,20 +108,34 @@ export default function Dashboard() {
         timeZone: userTimeZone,
       },
       attendees: meetingData.attendees.split(',').map(email => ({ email: email.trim() })),
+      
+      // ✅ NEW: Reminders Config
+      reminders: {
+        useDefault: false,
+        overrides: [
+          { method: 'email', minutes: 30 }, // Email 30 mins before
+          { method: 'popup', minutes: 10 }  // Phone notification 10 mins before
+        ],
+      },
+      
       conferenceData: {
         createRequest: { requestId: Math.random().toString(36).substring(7) }
       }
     };
 
     try {
-      const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(event),
-      });
+      // ✅ CHANGED URL: Added 'sendUpdates=all' to force emails
+      const response = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, 
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(event),
+        }
+      );
 
       const data = await response.json();
       
@@ -131,12 +143,12 @@ export default function Dashboard() {
         throw new Error(data.error.message);
       }
       
-      console.log("📅 Event Created Successfully:", data.htmlLink);
-      return data.htmlLink; // Return the Google Meet/Calendar Link
+      console.log("📅 Event Created & Emails Sent:", data.htmlLink);
+      return data.htmlLink;
 
     } catch (error) {
       console.error("Calendar API Error:", error);
-      alert("Failed to schedule on Google Calendar: " + error.message);
+      alert("Failed to schedule: " + error.message);
       return null;
     }
   };
