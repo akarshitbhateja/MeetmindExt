@@ -14,7 +14,7 @@ import {
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [meetings, setMeetings] = useState([]);
-  const [view, setView] = useState('list'); 
+  const [view, setView] = useState('list'); // 'list', 'create', 'detail'
   const [loading, setLoading] = useState(true);
 
   // Wizard State
@@ -33,8 +33,11 @@ export default function Dashboard() {
     polls: []
   });
 
+  // Poll State
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
+
+  // Assets & AI State
   const [audioFile, setAudioFile] = useState(null);
   const [pptFile, setPptFile] = useState(null);
   const [transcription, setTranscription] = useState('');
@@ -74,17 +77,9 @@ export default function Dashboard() {
   };
 
   const copyToClipboard = (text, e) => {
-    e.stopPropagation(); 
+    e.stopPropagation(); // Prevent opening the meeting detail
     navigator.clipboard.writeText(text);
     alert("Meeting Link Copied!");
-  };
-
-  // Helper to check if meeting is over
-  const isMeetingCompleted = (endTimeStr) => {
-    if (!endTimeStr) return false;
-    const end = new Date(endTimeStr);
-    const now = new Date();
-    return now > end;
   };
 
   // --- 2. Google Calendar Logic ---
@@ -145,6 +140,7 @@ export default function Dashboard() {
       );
 
       const data = await response.json();
+      
       if (data.error) throw new Error(data.error.message);
       
       console.log("📅 Event Created:", data.htmlLink);
@@ -157,7 +153,9 @@ export default function Dashboard() {
     }
   };
 
+
   // --- 3. Wizard Steps ---
+
   const handleNextStep1 = async () => {
     if (!formData.title || !formData.startTime || !formData.endTime) {
       alert("Please fill in the required fields.");
@@ -166,8 +164,13 @@ export default function Dashboard() {
 
     try {
       setLoading(true);
+      
       const calendarLink = await createGoogleCalendarEvent(formData);
-      if (!calendarLink) { setLoading(false); return; }
+      
+      if (!calendarLink) {
+        setLoading(false);
+        return; 
+      }
 
       const meetingData = { 
         ...formData, 
@@ -184,6 +187,7 @@ export default function Dashboard() {
 
       setLoading(false);
       setStep(2);
+
     } catch (error) {
       console.error(error);
       setLoading(false);
@@ -201,7 +205,11 @@ export default function Dashboard() {
 
   const handleNextStep2 = async () => {
     if (currentMeetingId) {
-      await axios.put('/api/meetings', { id: currentMeetingId, polls: formData.polls, pptUrl: pptFile ? "uploaded.pdf" : "" });
+      await axios.put('/api/meetings', { 
+        id: currentMeetingId, 
+        polls: formData.polls,
+        pptUrl: pptFile ? "uploaded_dummy_url.pdf" : "" 
+      });
     }
     setStep(3);
   };
@@ -216,6 +224,7 @@ export default function Dashboard() {
       
       const transRes = await axios.post('/api/groq/process', data);
       if(!transRes.data.success && transRes.data.error) throw new Error(transRes.data.error);
+      
       setTranscription(transRes.data.text);
 
       const sumData = new FormData();
@@ -229,7 +238,7 @@ export default function Dashboard() {
         id: currentMeetingId, 
         transcription: transRes.data.text, 
         summary: sumRes.data.summary,
-        status: 'completed' // Still save status for backup
+        status: 'completed'
       });
 
       setLoading(false);
@@ -256,6 +265,7 @@ export default function Dashboard() {
         alert("Assets shared with attendees!");
       } catch(e) { console.log("Post webhook skipped"); }
     }
+
     setShowShareModal(false);
     setView('list');
     setStep(1);
@@ -267,7 +277,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col">
       
-      {/* 🟢 FIXED NAVBAR */}
+      {/* 🟢 FIXED NAVBAR: Always visible, always same style */}
       <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 sticky top-0 z-50 shadow-md">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
           <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-green-600 rounded-lg flex items-center justify-center font-bold text-black">M</div>
@@ -281,6 +291,7 @@ export default function Dashboard() {
         </div>
       </nav>
 
+      {/* Main Content Area */}
       <main className="flex-1 p-8 max-w-7xl mx-auto w-full">
         
         {/* VIEW: LIST */}
@@ -332,8 +343,8 @@ export default function Dashboard() {
                   </div>
                   
                   <div className="flex items-center gap-4">
-                    {/* ✅ STATUS LOGIC: Show Completed if End Time Passed */}
-                    {isMeetingCompleted(m.endTime) ? (
+                    {/* STATUS OR ATTENDEES */}
+                    {m.status === 'completed' ? (
                       <span className="px-3 py-1 bg-green-900/20 text-green-500 text-xs font-semibold rounded border border-green-900/30 flex items-center gap-1">
                         <CheckCircle2 size={12}/> Completed
                       </span>
@@ -365,19 +376,22 @@ export default function Dashboard() {
           </motion.div>
         )}
 
-        {/* VIEW: CREATE WIZARD */}
+        {/* VIEW: CREATE WIZARD (Same logic, consistent layout) */}
         {view === 'create' && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-3xl mx-auto">
+            
             <div className="mb-8 text-center">
               <h2 className="text-3xl font-bold mb-2">Create Your Meeting</h2>
               <p className="text-gray-400">Schedule directly to Google Calendar</p>
             </div>
+
             <div className="flex justify-between items-center mb-10 px-10 relative">
                <div className="absolute top-1/2 left-0 w-full h-0.5 bg-zinc-800 -z-10"></div>
                <StepBadge num={1} label="Plan" active={step === 1} done={step > 1} />
                <StepBadge num={2} label="Assets" active={step === 2} done={step > 2} />
                <StepBadge num={3} label="AI & Final" active={step === 3} done={step > 3} />
             </div>
+
             <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-2xl">
               {step === 1 && (
                 <div className="space-y-6 animate-in fade-in">
@@ -412,6 +426,7 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
+
               {step === 2 && (
                 <div className="space-y-8 animate-in fade-in">
                    <h3 className="text-xl font-bold border-b border-zinc-800 pb-4">Assets & Polls</h3>
@@ -447,6 +462,7 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
+
               {step === 3 && (
                 <div className="space-y-6 animate-in fade-in">
                    <h3 className="text-xl font-bold border-b border-zinc-800 pb-4">Post-Meeting AI</h3>
@@ -513,6 +529,7 @@ export default function Dashboard() {
 
       </main>
 
+      {/* SHARE MODAL */}
       <AnimatePresence>
         {showShareModal && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
@@ -531,10 +548,12 @@ export default function Dashboard() {
           </motion.div>
         )}
       </AnimatePresence>
+
     </div>
   );
 }
 
+// Subcomponent for Stepper
 function StepBadge({ num, label, active, done }) {
   return (
     <div className="flex flex-col items-center z-10">
