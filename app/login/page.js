@@ -1,5 +1,5 @@
 'use client';
-import { signInWithPopup } from "firebase/auth";
+import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import { auth, provider } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
 import { Chrome } from "lucide-react";
@@ -9,22 +9,32 @@ export default function Login() {
 
   const handleLogin = async () => {
     try {
-      await signInWithPopup(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      
+      // ✅ 1. Get the Google Access Token
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      const token = credential.accessToken;
+
+      // ✅ 2. Save it securely for the session
+      if (token) {
+        sessionStorage.setItem('google_access_token', token);
+      }
+
       router.push('/dashboard');
     } catch (error) {
-      console.error(error);
+      console.error("Login Failed:", error);
+      alert("Login failed: " + error.message);
     }
   };
 
   return (
     <div className="h-screen w-full flex flex-col items-center justify-center bg-black relative overflow-hidden">
-      {/* Background Gradient */}
-      <div className="absolute top-[-20%] left-[-10%] w-125 h-125 bg-green-900/30 rounded-full blur-[120px]" />
-      <div className="absolute bottom-[-20%] right-[-10%] w-125 h-125 bg-purple-900/20 rounded-full blur-[120px]" />
+      <div className="absolute top-[-20%] left-[-10%] w-[500px] h-[500px] bg-green-900/30 rounded-full blur-[120px]" />
+      <div className="absolute bottom-[-20%] right-[-10%] w-[500px] h-[500px] bg-purple-900/20 rounded-full blur-[120px]" />
 
       <div className="z-10 flex flex-col items-center text-center space-y-8">
         <h1 className="text-6xl font-bold tracking-tighter">
-          Turn data <br /> into <span className="text-transparent bg-clip-text bg-linear-to-r from-green-400 to-green-600">decisions</span>
+          Turn data <br /> into <span className="text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-green-600">decisions</span>
         </h1>
         <p className="text-gray-400 max-w-md">
           Multimodal Meeting Copilot. Automated transcription, summarization, and action items powered by AI.
