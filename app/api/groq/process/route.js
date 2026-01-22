@@ -1,82 +1,93 @@
 import Groq from "groq-sdk";
 import { NextResponse } from "next/server";
 
-// Force dynamic to prevent caching issues on Vercel
+// ⚠️ Forces the API to run dynamically (Fixes many Vercel issues)
 export const dynamic = 'force-dynamic';
-
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY,
-});
 
 export async function POST(req) {
     try {
-        console.log("🚀 Starting Groq Processing...");
-
-        // 1. Check API Key
-        if (!process.env.GROQ_API_KEY) {
-            console.error("❌ CRITICAL: GROQ_API_KEY is missing in Environment Variables");
-            throw new Error("Server Configuration Error: GROQ_API_KEY is missing.");
+        // 1. Validate API Key
+        const apiKey = process.env.GROQ_API_KEY;
+        if (!apiKey) {
+            console.error("❌ CRITICAL: GROQ_API_KEY is missing in Vercel Environment Variables.");
+            return NextResponse.json(
+                { success: false, error: "Server Configuration Error: API Key missing." }, 
+                { status: 500 }
+            );
         }
 
+        const groq = new Groq({ apiKey: apiKey });
         const formData = await req.formData();
         const task = formData.get("task");
-        
-        console.log(`📝 Task received: ${task}`);
 
-        // --- TASK: TRANSCRIBE ---
+        // 2. Task: Transcribe
         if (task === 'transcribe') {
             const file = formData.get("file");
-            if (!file) throw new Error("No file uploaded");
-            
-            console.log(`📁 File received: ${file.name} (${file.size} bytes)`);
+            if (!file) return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
 
-            // Check file size (Vercel Limit is ~4.5MB)
-            if (file.size > 4 * 1024 * 1024) {
-                throw new Error("File is too large for Vercel Free Tier (Max 4MB). Please try a shorter clip.");
+            console.log(`📁 Processing File: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+
+            // Vercel Limit Check (4MB safe limit)
+            if (file.size > 4.5 * 1024 * 1024) {
+                return NextResponse.json(
+                    { error: "File too large. Vercel Free Tier limits uploads to 4.5MB. Please upload a shorter clip." }, 
+                    { status: 413 }
+                );
             }
 
-            const transcription = await groq.audio.transcriptions.create({
-                file: file,
-                model: "whisper-large-v3",
-                response_format: "json",
-            });
-            
-            console.log("✅ Transcription Complete");
-            return NextResponse.json({ text: transcription.text });
+            try {
+                const transcription = await groq.audio.transcriptions.create({
+                    file: file,
+                    model: "whisper-large-v3",
+                    response_format: "json",
+                });
+                return NextResponse.json({ success: true, text: transcription.text });
+            } catch (groqErr) {
+                console.error("Groq Transcribe Error:", groqErr);
+                // Handle 403 specifically
+                if (groqErr.status === 403) {
+                    return NextResponse.json({ error: "Groq API Rejected: Invalid API Key or Account Limit." }, { status: 403 });
+                }
+                throw groqErr;
+            }
         } 
         
-        // --- TASK: SUMMARIZE ---
+        // 3. Task: Summarize
         if (task === 'summarize') {
             const textContext = formData.get("text");
-            if (!textContext) throw new Error("No text provided for summarization");
+            if (!textContext) return NextResponse.json({ error: "No text provided" }, { status: 400 });
 
-            const completion = await groq.chat.completions.create({
-                messages: [
-                    {
-                        role: "system",
-                        content: "You are an expert meeting secretary. Create a concise executive summary (HTML format) and list key action items from the transcript provided."
-                    },
-                    {
-                        role: "user",
-                        content: textContext
-                    }
-                ],
-                model: "openai/gpt-oss-120b",
-            });
-            
-            console.log("✅ Summary Complete");
-            return NextResponse.json({ summary: completion.choices[0].message.content });
+            try {
+                const completion = await groq.chat.completions.create({
+                    messages: [
+                        {
+                            role: "system",
+                            content: "You are an expert meeting secretary. Create a concise executive summary (HTML format) and list key action items from the transcript provided."
+                        },
+                        {
+                            role: "user",
+                            content: textContext
+                        }
+                    ],
+                    model: "openai/gpt-oss-120b",
+                });
+                return NextResponse.json({ success: true, summary: completion.choices[0].message.content });
+            } catch (groqErr) {
+                console.error("Groq Summary Error:", groqErr);
+                if (groqErr.status === 403) {
+                    return NextResponse.json({ error: "Groq API Rejected: Invalid API Key or Account Limit." }, { status: 403 });
+                }
+                throw groqErr;
+            }
         }
 
-        return NextResponse.json({ error: "Invalid task specified" }, { status: 400 });
+        return NextResponse.json({ error: "Invalid task" }, { status: 400 });
 
     } catch (error) {
-        console.error("❌ Groq API Error:", error);
-        // Return the ACTUAL error message to the frontend for debugging
+        console.error("❌ General API Error:", error);
         return NextResponse.json({ 
             success: false, 
-            error: error.message || "Internal Server Error",
-            details: error.toString() 
+            error: error.message || "Internal Server Error" 
         }, { status: 500 });
     }
 }
