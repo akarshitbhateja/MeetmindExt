@@ -14,13 +14,16 @@ import {
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [meetings, setMeetings] = useState([]);
-  const [view, setView] = useState('list'); 
+  const [view, setView] = useState('list'); // 'list', 'create', 'detail'
   const [loading, setLoading] = useState(true);
 
   // Wizard State
   const [step, setStep] = useState(1);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareOptions, setShareOptions] = useState({ video: true, notes: true, ppt: true });
+
+  // Detail View State
+  const [activeTab, setActiveTab] = useState('summary'); // 'summary', 'transcript', 'upload'
 
   // Form Data
   const [formData, setFormData] = useState({
@@ -164,6 +167,21 @@ export default function Dashboard() {
     } catch (error) { setLoading(false); alert("Failed to save."); }
   };
 
+  const handleAddPoll = () => {
+    if(!pollQuestion) return;
+    const newPoll = { question: pollQuestion, options: pollOptions.filter(o => o !== '') };
+    setFormData({ ...formData, polls: [...formData.polls, newPoll] });
+    setPollQuestion('');
+    setPollOptions(['', '']);
+  };
+
+  const handleNextStep2 = async () => {
+    if (currentMeetingId) {
+      await axios.put('/api/meetings', { id: currentMeetingId, polls: formData.polls, pptUrl: pptFile ? "uploaded_dummy.pdf" : "" });
+    }
+    setStep(3);
+  };
+
   const handleProcessAudio = async () => {
     if (!audioFile) return alert("Please upload audio.");
     setLoading(true);
@@ -192,7 +210,7 @@ export default function Dashboard() {
       });
 
       setLoading(false);
-      setShowShareModal(true); 
+      setActiveTab('summary'); // Auto switch to summary tab
     } catch (err) { setLoading(false); alert("AI Failed: " + err.message); }
   };
 
@@ -219,7 +237,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col">
       
-      {/* 🟢 NAVBAR */}
+      {/* 🟢 NAVBAR - Fixed & Consistent */}
       <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 sticky top-0 z-50 h-[72px]">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
           <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-green-600 rounded-lg flex items-center justify-center font-bold text-black">M</div>
@@ -251,11 +269,9 @@ export default function Dashboard() {
 
             <div className="grid gap-4">
               {meetings.map((m) => {
-                // Determine Status Logic
                 const status = getMeetingStatus(m.startTime, m.endTime);
-
                 return (
-                  <div key={m._id} onClick={() => { setFormData(m); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(m.summary || ''); setView('detail'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
+                  <div key={m._id} onClick={() => { setFormData(m); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(m.summary || ''); setView('detail'); setActiveTab(m.summary ? 'summary' : 'upload'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
                     <div className="flex gap-4 items-center">
                       <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center font-bold text-gray-400 group-hover:text-green-400 group-hover:bg-zinc-800/80 transition-all border border-white/5">
                           {m.title.charAt(0).toUpperCase()}
@@ -269,39 +285,15 @@ export default function Dashboard() {
                       </div>
                     </div>
                     
-                    {/* RIGHT SIDE: Status & Actions */}
                     <div className="flex items-center gap-3">
-                      
-                      {/* ✅ 1. STATUS BADGES */}
-                      {status === 'completed' && (
-                        <span className="px-3 py-1 bg-green-900/20 text-green-500 text-xs font-semibold rounded border border-green-900/30 flex items-center gap-1">
-                          <CheckCircle2 size={12}/> Completed
-                        </span>
-                      )}
+                      {status === 'completed' && <span className="px-3 py-1 bg-green-900/20 text-green-500 text-xs font-semibold rounded border border-green-900/30 flex items-center gap-1"><CheckCircle2 size={12}/> Completed</span>}
+                      {status === 'ongoing' && <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse"><Radio size={12}/> • Ongoing</span>}
+                      {status === 'upcoming' && <span className="px-3 py-1 bg-zinc-800 text-gray-300 text-xs rounded border border-zinc-700 flex items-center gap-2"><Clock size={12}/> Upcoming</span>}
 
-                      {status === 'ongoing' && (
-                        <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse">
-                          <Radio size={12}/> Ongoing
-                        </span>
-                      )}
+                      <span className="text-xs text-gray-500 flex items-center gap-1 mr-2"><Users size={12}/> {m.attendees ? m.attendees.split(',').length : 0}</span>
 
-                      {status === 'upcoming' && (
-                        <span className="px-3 py-1 bg-zinc-800 text-gray-300 text-xs rounded border border-zinc-700 flex items-center gap-2">
-                          <Clock size={12}/> Upcoming
-                        </span>
-                      )}
-
-                      <span className="text-xs text-gray-500 flex items-center gap-1 mr-2">
-                          <Users size={12}/> {m.attendees ? m.attendees.split(',').length : 0}
-                      </span>
-
-                      {/* ✅ 2. COPY LINK ICON */}
                       {m.meetingLink && (
-                        <button 
-                          onClick={(e) => copyToClipboard(m.meetingLink, e)} 
-                          className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all" 
-                          title="Copy Meeting Link"
-                        >
+                        <button onClick={(e) => copyToClipboard(m.meetingLink, e)} className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all" title="Copy Meeting Link">
                           <LinkIcon size={16}/>
                         </button>
                       )}
@@ -313,7 +305,7 @@ export default function Dashboard() {
           </motion.div>
         )}
 
-        {/* VIEW: CREATE WIZARD (Same as before) */}
+        {/* VIEW: CREATE WIZARD (Same logic) */}
         {view === 'create' && (
            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-3xl mx-auto">
              <div className="mb-8 text-center"><h2 className="text-3xl font-bold mb-2">Create Your Meeting</h2></div>
@@ -339,7 +331,7 @@ export default function Dashboard() {
               {step === 2 && (
                 <div className="space-y-8 animate-in fade-in">
                    <div><label className="block text-sm text-gray-400 mb-2">Upload Presentation</label><div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center"><input type="file" className="hidden" id="ppt-upload" onChange={e => setPptFile(e.target.files[0])} /><label htmlFor="ppt-upload" className="cursor-pointer flex flex-col items-center"><Upload className="text-green-500 mb-2" size={24}/><span className="text-sm font-medium">{pptFile ? pptFile.name : "Select PDF/PPT"}</span></label></div></div>
-                   <div><label className="block text-sm text-gray-400 mb-2">Polls</label><div className="bg-black/40 border border-zinc-700 rounded-lg p-4"><input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Poll Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/><button onClick={() => setPollOptions([...pollOptions, ''])} className="text-xs text-green-500 mb-3">+ Add Option</button></div></div>
+                   <div><label className="block text-sm text-gray-400 mb-2">Polls</label><div className="bg-black/40 border border-zinc-700 rounded-lg p-4"><input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Poll Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/><button onClick={() => setPollOptions([...pollOptions, ''])} className="text-xs text-green-500 mb-3">+ Add Option</button><button onClick={handleAddPoll} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm"><Plus size={14} className="inline"/> Add Poll</button></div><div className="mt-2 space-y-1">{formData.polls.map((p, i) => (<div key={i} className="flex justify-between items-center bg-zinc-900 px-3 py-1.5 rounded text-xs text-gray-400"><span>{p.question}</span><span>{p.options.length} opts</span></div>))}</div></div>
                    <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button><button onClick={() => setStep(3)} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg">Next &gt;</button></div>
                 </div>
               )}
@@ -353,82 +345,109 @@ export default function Dashboard() {
            </motion.div>
         )}
 
-        {/* VIEW: DETAIL */}
+        {/* VIEW: DETAIL (TABBED INTERFACE) */}
         {view === 'detail' && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid grid-cols-12 gap-8 h-full pb-20">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full space-y-6 pb-20">
              
-             {/* Left Column: Meeting Info */}
-             <div className="col-span-4 space-y-4">
-                 <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                    <button onClick={() => setView('list')} className="mb-6 text-xs text-gray-400 hover:text-white flex items-center gap-1 transition-colors">
-                      <ArrowLeft size={14}/> Back to List
-                    </button>
-                    
-                    <h2 className="text-3xl font-bold mb-4 leading-tight">{formData.title}</h2>
-                    
-                    <div className="space-y-4 text-sm text-gray-400">
-                       <div className="flex items-center gap-3">
-                         <Calendar size={16} className="text-zinc-500"/> 
-                         {formData.startTime?.replace('T', ' ')}
-                       </div>
-                       <div className="flex items-center gap-3">
-                         <Users size={16} className="text-zinc-500"/> 
-                         {formData.attendees?.split(',').length} Participants
-                       </div>
-                       
-                       {/* COPY LINK ICON (Detail View) */}
-                       {formData.meetingLink && (
-                         <div className="flex items-center gap-3 mt-4 pt-4 border-t border-white/5">
-                           <a href={formData.meetingLink} target="_blank" className="flex items-center gap-2 text-green-400 hover:underline">
-                             <LinkIcon size={16}/> Open Calendar
-                           </a>
-                           <button onClick={(e) => copyToClipboard(formData.meetingLink, e)} className="p-1.5 bg-zinc-800 rounded hover:bg-zinc-700 transition">
-                             <Copy size={14} className="text-gray-400"/>
-                           </button>
-                         </div>
-                       )}
-                    </div>
-                 </div>
-
-                 <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                    <h3 className="font-semibold mb-3 text-white/80 uppercase text-xs tracking-wider">Agenda</h3>
-                    <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
-                 </div>
+             {/* Header */}
+             <div className="flex justify-between items-start border-b border-white/10 pb-6">
+                <div>
+                   <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to Dashboard</button>
+                   <h2 className="text-3xl font-bold leading-tight">{formData.title}</h2>
+                   <div className="flex items-center gap-4 text-sm text-gray-400 mt-2">
+                       <span className="flex items-center gap-2"><Calendar size={14}/> {formData.startTime?.replace('T', ' ')}</span>
+                       <span className="flex items-center gap-2"><Users size={14}/> {formData.attendees?.split(',').length} Participants</span>
+                   </div>
+                </div>
+                <div className="flex gap-3">
+                   {formData.meetingLink && (
+                     <button onClick={(e) => copyToClipboard(formData.meetingLink, e)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>
+                   )}
+                   <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
+                </div>
              </div>
-             
-             {/* Right Column: AI Results */}
-             <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-8 min-h-[500px]">
-               <h3 className="text-xl font-bold flex items-center gap-2 mb-8">
-                 <Mic className="text-green-500"/> AI Copilot Results
-               </h3>
-               
-               {transcription ? (
-                 <div className="space-y-8">
-                    {/* Summary */}
-                    <div className="bg-black/30 p-6 rounded-xl border border-white/5">
-                        <h4 className="text-green-400 font-bold mb-4 text-xs uppercase tracking-widest">Executive Summary</h4>
-                        <div 
-                          className="prose prose-invert prose-sm max-w-none text-gray-300 leading-relaxed" 
-                          dangerouslySetInnerHTML={{ __html: summary }} 
-                        />
-                    </div>
 
-                    {/* Transcript */}
-                    <div className="bg-black/30 p-6 rounded-xl border border-white/5 opacity-80">
-                        <h4 className="text-gray-400 font-bold mb-4 text-xs uppercase tracking-widest">Full Transcript</h4>
-                        <div className="text-xs text-gray-500 leading-relaxed font-mono max-h-80 overflow-y-auto pr-2 custom-scrollbar">
-                          {transcription}
+             {/* Content Grid */}
+             <div className="grid grid-cols-12 gap-8 h-full">
+                
+                {/* LEFT SIDE: Info & Polls */}
+                <div className="col-span-4 space-y-6">
+                   <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
+                      <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda & Context</h3>
+                      <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda details provided."}</p>
+                   </div>
+                   {formData.polls && formData.polls.length > 0 && (
+                     <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
+                        <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
+                        <div className="space-y-3">{formData.polls.map((p, i) => (<div key={i} className="bg-black/30 p-3 rounded-lg border border-white/5"><p className="text-sm font-medium mb-1">{p.question}</p><div className="flex gap-2 text-xs text-gray-500">{p.options.map((opt, j) => (<span key={j} className="bg-zinc-800 px-2 py-1 rounded">{opt}</span>))}</div></div>))}</div>
+                     </div>
+                   )}
+                </div>
+
+                {/* RIGHT SIDE: AI Hub Tabs */}
+                <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col min-h-[500px]">
+                   
+                   {/* Tab Header */}
+                   <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4">
+                      {['summary', 'transcript', 'upload'].map((tab) => (
+                        <button 
+                          key={tab} 
+                          onClick={() => setActiveTab(tab)}
+                          className={`pb-4 px-4 text-sm font-medium transition-all relative capitalize ${activeTab === tab ? 'text-green-400' : 'text-gray-400 hover:text-white'}`}
+                        >
+                          {tab === 'upload' ? 'Recording / Upload' : tab}
+                          {activeTab === tab && <motion.div layoutId="underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-green-400"/>}
+                        </button>
+                      ))}
+                   </div>
+
+                   {/* Tab Content */}
+                   <div className="p-8 flex-1 overflow-y-auto custom-scrollbar">
+                      {activeTab === 'summary' && (
+                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                           {summary ? (
+                             <div className="prose prose-invert prose-sm max-w-none text-gray-300 leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
+                           ) : (
+                             <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated yet.</p><button onClick={() => setActiveTab('upload')} className="text-green-400 text-sm hover:underline mt-2">Go to Upload</button></div>
+                           )}
                         </div>
-                    </div>
-                 </div>
-               ) : (
-                 <div className="h-full flex flex-col items-center justify-center text-center py-20 text-gray-500 border-2 border-dashed border-white/5 rounded-xl">
-                    <p>No recording uploaded yet.</p>
-                    <button onClick={() => { setView('create'); setStep(3); }} className="mt-4 text-green-400 hover:text-green-300 text-sm font-medium">
-                      Upload Recording
-                    </button>
-                 </div>
-               )}
+                      )}
+
+                      {activeTab === 'transcript' && (
+                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                           {transcription ? (
+                             <div className="font-mono text-xs leading-relaxed text-gray-400 whitespace-pre-wrap">{transcription}</div>
+                           ) : (
+                             <div className="text-center py-20 text-gray-500"><Mic size={40} className="mx-auto mb-4 opacity-20"/><p>No transcript available.</p></div>
+                           )}
+                        </div>
+                      )}
+
+                      {activeTab === 'upload' && (
+                        <div className="flex flex-col items-center justify-center h-full space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                           {!summary ? (
+                             <div className="w-full max-w-md border-2 border-dashed border-zinc-700 bg-black/20 rounded-xl p-8 flex flex-col items-center text-center">
+                                <div className="w-16 h-16 bg-zinc-800 rounded-full flex items-center justify-center mb-4"><Upload size={24} className="text-green-500"/></div>
+                                <h4 className="font-semibold mb-2">Upload Meeting Recording</h4>
+                                <p className="text-xs text-gray-500 mb-6">Supported: MP3, MP4, WAV (Max 4.5MB Free Tier)</p>
+                                <input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-600 file:text-black hover:file:bg-green-500 mb-4"/>
+                                <button onClick={handleProcessAudio} disabled={loading} className="w-full bg-white text-black font-bold py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-gray-200 disabled:opacity-50">
+                                   {loading ? <span className="animate-spin">⏳</span> : <PlayCircle size={18}/>}
+                                   {loading ? 'Processing with AI...' : 'Generate Insights'}
+                                </button>
+                             </div>
+                           ) : (
+                             <div className="text-center space-y-4">
+                                <div className="w-16 h-16 bg-green-900/20 border border-green-500/50 rounded-full flex items-center justify-center mx-auto"><CheckCircle2 size={32} className="text-green-500"/></div>
+                                <h3 className="text-xl font-bold">Processing Complete</h3>
+                                <p className="text-gray-400 text-sm">Transcript and Summary have been generated successfully.</p>
+                                <button onClick={() => setActiveTab('summary')} className="text-green-400 hover:underline">View Results</button>
+                             </div>
+                           )}
+                        </div>
+                      )}
+                   </div>
+                </div>
              </div>
           </motion.div>
         )}
