@@ -281,7 +281,7 @@ export default function Dashboard() {
 
                       {status === 'ongoing' && (
                         <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse">
-                          <Radio size={12}/> • Ongoing
+                          <Radio size={12}/> Ongoing
                         </span>
                       )}
 
