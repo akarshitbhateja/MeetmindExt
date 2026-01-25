@@ -6,9 +6,9 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  Plus, Calendar, Users, 
-  Upload, CheckCircle2, LogOut, 
-  PlayCircle, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Clock
+  Plus, Calendar, Clock, Users, FileText, 
+  Upload, CheckCircle2, MoreHorizontal, LogOut, 
+  Trash2, PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -84,12 +84,17 @@ export default function Dashboard() {
     return text.replace(/```html|```/g, '').trim();
   };
 
-  // ✅ LOGIC: Check if meeting time has passed
-  const isMeetingCompleted = (endTimeStr) => {
-    if (!endTimeStr) return false;
-    const end = new Date(endTimeStr);
+  // ✅ LOGIC: Determine Status (Upcoming, Ongoing, Completed)
+  const getMeetingStatus = (startStr, endStr) => {
+    if (!startStr || !endStr) return 'upcoming';
+    
     const now = new Date();
-    return now > end;
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+
+    if (now > end) return 'completed';
+    if (now >= start && now <= end) return 'ongoing';
+    return 'upcoming';
   };
 
   // --- 2. Google Calendar Logic ---
@@ -214,7 +219,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col">
       
-      {/* 🟢 NAVBAR - Fixed & Consistent for ALL Views */}
+      {/* 🟢 NAVBAR */}
       <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 sticky top-0 z-50 h-[72px]">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
           <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-green-600 rounded-lg flex items-center justify-center font-bold text-black">M</div>
@@ -245,57 +250,70 @@ export default function Dashboard() {
             </div>
 
             <div className="grid gap-4">
-              {meetings.map((m) => (
-                <div key={m._id} onClick={() => { setFormData(m); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(m.summary || ''); setView('detail'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
-                  <div className="flex gap-4 items-center">
-                     <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center font-bold text-gray-400 group-hover:text-green-400 group-hover:bg-zinc-800/80 transition-all border border-white/5">
-                        {m.title.charAt(0).toUpperCase()}
-                     </div>
-                     <div>
-                        <h3 className="font-bold text-lg group-hover:text-green-400 transition-colors">{m.title}</h3>
-                        <p className="text-sm text-gray-500 flex items-center gap-2">
-                           <Calendar size={14} />
-                           {m.startTime ? new Date(m.startTime).toLocaleString() : m.date}
-                        </p>
-                     </div>
-                  </div>
-                  
-                  {/* RIGHT SIDE: Status & Actions */}
-                  <div className="flex items-center gap-3">
+              {meetings.map((m) => {
+                // Determine Status Logic
+                const status = getMeetingStatus(m.startTime, m.endTime);
+
+                return (
+                  <div key={m._id} onClick={() => { setFormData(m); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(m.summary || ''); setView('detail'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
+                    <div className="flex gap-4 items-center">
+                      <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center font-bold text-gray-400 group-hover:text-green-400 group-hover:bg-zinc-800/80 transition-all border border-white/5">
+                          {m.title.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                          <h3 className="font-bold text-lg group-hover:text-green-400 transition-colors">{m.title}</h3>
+                          <p className="text-sm text-gray-500 flex items-center gap-2">
+                            <Calendar size={14} />
+                            {m.startTime ? new Date(m.startTime).toLocaleString() : m.date}
+                          </p>
+                      </div>
+                    </div>
                     
-                    {/* 1. STATUS BADGE (Time Based) */}
-                    {isMeetingCompleted(m.endTime) ? (
-                      <span className="px-3 py-1 bg-green-900/20 text-green-500 text-xs font-semibold rounded border border-green-900/30 flex items-center gap-1">
-                        <CheckCircle2 size={12}/> Completed
-                      </span>
-                    ) : (
-                      <span className="px-3 py-1 bg-zinc-800 text-gray-300 text-xs rounded border border-zinc-700 flex items-center gap-2">
-                        <Clock size={12}/> Upcoming
-                      </span>
-                    )}
+                    {/* RIGHT SIDE: Status & Actions */}
+                    <div className="flex items-center gap-3">
+                      
+                      {/* ✅ 1. STATUS BADGES */}
+                      {status === 'completed' && (
+                        <span className="px-3 py-1 bg-green-900/20 text-green-500 text-xs font-semibold rounded border border-green-900/30 flex items-center gap-1">
+                          <CheckCircle2 size={12}/> Completed
+                        </span>
+                      )}
 
-                    <span className="text-xs text-gray-500 flex items-center gap-1 mr-2">
-                        <Users size={12}/> {m.attendees ? m.attendees.split(',').length : 0}
-                    </span>
+                      {status === 'ongoing' && (
+                        <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse">
+                          <Radio size={12}/> • Ongoing
+                        </span>
+                      )}
 
-                    {/* 2. COPY LINK ICON (List View) */}
-                    {m.meetingLink && (
-                      <button 
-                        onClick={(e) => copyToClipboard(m.meetingLink, e)} 
-                        className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all" 
-                        title="Copy Meeting Link"
-                      >
-                        <LinkIcon size={16}/>
-                      </button>
-                    )}
+                      {status === 'upcoming' && (
+                        <span className="px-3 py-1 bg-zinc-800 text-gray-300 text-xs rounded border border-zinc-700 flex items-center gap-2">
+                          <Clock size={12}/> Upcoming
+                        </span>
+                      )}
+
+                      <span className="text-xs text-gray-500 flex items-center gap-1 mr-2">
+                          <Users size={12}/> {m.attendees ? m.attendees.split(',').length : 0}
+                      </span>
+
+                      {/* ✅ 2. COPY LINK ICON */}
+                      {m.meetingLink && (
+                        <button 
+                          onClick={(e) => copyToClipboard(m.meetingLink, e)} 
+                          className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all" 
+                          title="Copy Meeting Link"
+                        >
+                          <LinkIcon size={16}/>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </motion.div>
         )}
 
-        {/* VIEW: CREATE WIZARD */}
+        {/* VIEW: CREATE WIZARD (Same as before) */}
         {view === 'create' && (
            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-3xl mx-auto">
              <div className="mb-8 text-center"><h2 className="text-3xl font-bold mb-2">Create Your Meeting</h2></div>
@@ -358,7 +376,7 @@ export default function Dashboard() {
                          {formData.attendees?.split(',').length} Participants
                        </div>
                        
-                       {/* Link Section in Detail */}
+                       {/* COPY LINK ICON (Detail View) */}
                        {formData.meetingLink && (
                          <div className="flex items-center gap-3 mt-4 pt-4 border-t border-white/5">
                            <a href={formData.meetingLink} target="_blank" className="flex items-center gap-2 text-green-400 hover:underline">
@@ -386,7 +404,7 @@ export default function Dashboard() {
                
                {transcription ? (
                  <div className="space-y-8">
-                    {/* Formatted Summary */}
+                    {/* Summary */}
                     <div className="bg-black/30 p-6 rounded-xl border border-white/5">
                         <h4 className="text-green-400 font-bold mb-4 text-xs uppercase tracking-widest">Executive Summary</h4>
                         <div 
