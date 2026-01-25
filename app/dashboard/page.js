@@ -1,5 +1,6 @@
 'use client';
-import { useState, useEffect } from 'react';
+
+import { useState, useEffect, useMemo } from 'react';
 import { auth, provider, signInWithPopup, GoogleAuthProvider } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
@@ -7,51 +8,48 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Plus, Calendar, Clock, Users, FileText, 
-  Upload, CheckCircle2, MoreHorizontal, LogOut, 
-  Trash2, PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio
+  Upload, CheckCircle2, LogOut, 
+  PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download
 } from 'lucide-react';
 
 export default function Dashboard() {
+
+  // --- STATE MANAGEMENT ---
   const [user, setUser] = useState(null);
   const [meetings, setMeetings] = useState([]);
-  const [view, setView] = useState('list'); 
+  const [view, setView] = useState('list'); // 'list', 'create', 'detail'
   const [loading, setLoading] = useState(true);
 
-  // Wizard State
+  // Wizard & Meeting Data
   const [step, setStep] = useState(1);
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [shareOptions, setShareOptions] = useState({ video: true, notes: true, ppt: true });
-
-  // Detail View State
-  const [activeTab, setActiveTab] = useState('summary'); 
-
-  // Form Data
   const [formData, setFormData] = useState({
-    title: '', 
-    startTime: '', 
-    endTime: '', 
-    description: '', 
-    attendees: '', 
-    pptUrl: '', 
-    polls: []
+    title: '', startTime: '', endTime: '', description: '', attendees: '', pptUrl: '', polls: []
   });
+  const [currentMeetingId, setCurrentMeetingId] = useState(null);
 
+  // Polls
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
+
+  // AI & Assets
+  const [activeTab, setActiveTab] = useState('summary'); 
   const [audioFile, setAudioFile] = useState(null);
   const [pptFile, setPptFile] = useState(null);
   const [transcription, setTranscription] = useState('');
   const [summary, setSummary] = useState('');
-  const [currentMeetingId, setCurrentMeetingId] = useState(null);
+  const [transcriptSearch, setTranscriptSearch] = useState('');
+
+  // Modals
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareOptions, setShareOptions] = useState({ video: true, notes: true, ppt: true });
 
   const router = useRouter();
 
-  // --- 1. Authentication & Data Fetching ---
+  // --- AUTH & INIT ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (!currentUser) {
-        router.push('/login');
-      } else {
+      if (!currentUser) router.push('/login');
+      else {
         setUser(currentUser);
         fetchMeetings(currentUser.uid);
       }
@@ -64,10 +62,7 @@ export default function Dashboard() {
       const res = await axios.get(`/api/meetings?userId=${uid}`);
       setMeetings(res.data.data);
       setLoading(false);
-    } catch (error) {
-      console.error("Fetch error:", error);
-      setLoading(false);
-    }
+    } catch (error) { console.error(error); setLoading(false); }
   };
 
   const handleSignOut = async () => {
@@ -76,10 +71,19 @@ export default function Dashboard() {
     router.push('/login');
   };
 
-  const copyToClipboard = (text, e) => {
-    if(e) e.stopPropagation(); 
+  // --- UTILS ---
+  const copyText = (text) => {
     navigator.clipboard.writeText(text);
-    alert("Meeting Link Copied to Clipboard!");
+    alert("Copied to clipboard!");
+  };
+
+  const exportSummary = () => {
+    const blob = new Blob([summary], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${formData.title.replace(/\s+/g, '_')}_summary.txt`;
+    a.click();
   };
 
   const cleanSummary = (text) => {
@@ -90,14 +94,19 @@ export default function Dashboard() {
   const getMeetingStatus = (startStr, endStr) => {
     if (!startStr || !endStr) return 'upcoming';
     const now = new Date();
-    const start = new Date(startStr);
-    const end = new Date(endStr);
-    if (now > end) return 'completed';
-    if (now >= start && now <= end) return 'ongoing';
+    if (now > new Date(endStr)) return 'completed';
+    if (now >= new Date(startStr) && now <= new Date(endStr)) return 'ongoing';
     return 'upcoming';
   };
 
-  // --- 2. Google Calendar Logic ---
+  const filteredTranscript = useMemo(() => {
+    if (!transcriptSearch) return transcription;
+    return transcription.split('\n').filter(line => 
+      line.toLowerCase().includes(transcriptSearch.toLowerCase())
+    ).join('\n___\n'); // Separator for context
+  }, [transcriptSearch, transcription]);
+
+  // --- GOOGLE CALENDAR ---
   const createGoogleCalendarEvent = async (meetingData) => {
     let token = sessionStorage.getItem('google_access_token');
     if (!token) {
@@ -106,16 +115,13 @@ export default function Dashboard() {
         const credential = GoogleAuthProvider.credentialFromResult(result);
         token = credential.accessToken;
         sessionStorage.setItem('google_access_token', token);
-      } catch (e) {
-        alert("We need to connect to Google Calendar to schedule this.");
-        return null;
-      }
+      } catch (e) { alert("Calendar access required."); return null; }
     }
 
     const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const event = {
       summary: meetingData.title,
-      description: `${meetingData.description}\n\n--\nScheduled via MeetMind Copilot`,
+      description: `${meetingData.description}\n\n--\nScheduled via MeetMind`,
       start: { dateTime: meetingData.startTime + ":00", timeZone: userTimeZone },
       end: { dateTime: meetingData.endTime + ":00", timeZone: userTimeZone },
       attendees: meetingData.attendees.split(',').map(email => ({ email: email.trim() })),
@@ -124,32 +130,24 @@ export default function Dashboard() {
     };
 
     try {
-      const response = await fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, 
-        {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify(event),
-        }
-      );
+      const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, {
+        method: "POST", headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(event)
+      });
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
       return data.htmlLink;
-    } catch (error) {
-      alert("Failed to schedule: " + error.message);
-      return null;
-    }
+    } catch (error) { alert("Schedule failed: " + error.message); return null; }
   };
 
-  // --- 3. Actions ---
+  // --- ACTIONS ---
   const handleNextStep1 = async () => {
-    if (!formData.title || !formData.startTime) { alert("Please fill details."); return; }
-    try {
-      setLoading(true);
-      const calendarLink = await createGoogleCalendarEvent(formData);
-      if (!calendarLink) { setLoading(false); return; }
+    if (!formData.title || !formData.startTime) { alert("Required fields missing."); return; }
+    setLoading(true);
+    const calendarLink = await createGoogleCalendarEvent(formData);
+    if (!calendarLink) { setLoading(false); return; }
 
-      const meetingData = { ...formData, userId: user.uid, meetingLink: calendarLink };
+    const meetingData = { ...formData, userId: user.uid, meetingLink: calendarLink };
+    try {
       let res;
       if (!currentMeetingId) {
         res = await axios.post('/api/meetings', meetingData);
@@ -157,72 +155,54 @@ export default function Dashboard() {
       } else {
         await axios.put('/api/meetings', { id: currentMeetingId, ...meetingData });
       }
-      setLoading(false);
       setStep(2);
-    } catch (error) { setLoading(false); alert("Failed to save."); }
+    } catch (e) { alert("Save failed."); }
+    setLoading(false);
   };
 
   const handleAddPoll = () => {
     if(!pollQuestion) return;
     const newPoll = { question: pollQuestion, options: pollOptions.filter(o => o !== '') };
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
-    setPollQuestion('');
-    setPollOptions(['', '']);
+    setPollQuestion(''); setPollOptions(['', '']);
   };
 
   const handleNextStep2 = async () => {
-    if (currentMeetingId) {
-      await axios.put('/api/meetings', { id: currentMeetingId, polls: formData.polls, pptUrl: pptFile ? "uploaded_dummy.pdf" : "" });
-    }
+    if (currentMeetingId) await axios.put('/api/meetings', { id: currentMeetingId, polls: formData.polls, pptUrl: pptFile ? "uploaded.pdf" : "" });
     setStep(3);
   };
 
   const handleProcessAudio = async () => {
-    if (!audioFile) return alert("Please upload audio.");
+    if (!audioFile) return alert("Upload audio first.");
     setLoading(true);
     try {
       const data = new FormData();
       data.append("file", audioFile);
       data.append("task", "transcribe");
-      
       const transRes = await axios.post('/api/groq/process', data);
-      setTranscription(transRes.data.text);
-
+      
       const sumData = new FormData();
       sumData.append("task", "summarize");
       sumData.append("text", transRes.data.text);
-      
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      const cleanedSummary = cleanSummary(sumRes.data.summary);
-      setSummary(cleanedSummary);
+      const cleaned = cleanSummary(sumRes.data.summary);
+      setTranscription(transRes.data.text);
+      setSummary(cleaned);
 
       await axios.put('/api/meetings', { 
-        id: currentMeetingId, 
-        transcription: transRes.data.text, 
-        summary: cleanedSummary,
-        status: 'completed'
+        id: currentMeetingId, transcription: transRes.data.text, summary: cleaned, status: 'completed'
       });
-
-      setLoading(false);
-      setActiveTab('summary'); 
-    } catch (err) { setLoading(false); alert("AI Failed: " + err.message); }
+      setActiveTab('summary');
+    } catch (e) { alert("AI Error: " + e.message); }
+    setLoading(false);
   };
 
   const handleFinalFinish = async () => {
     if (process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK) {
-        try {
-            await axios.post(process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK, {
-              meetingId: currentMeetingId,
-              title: formData.title,
-              summary: shareOptions.notes ? summary : '',
-              transcription: shareOptions.notes ? transcription : '',
-              attendees: formData.attendees,
-              includeVideo: shareOptions.video,
-              includePPT: shareOptions.ppt
-            });
-            alert("Assets shared!");
-        } catch(e) { console.log(e); }
+        try { await axios.post(process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK, {
+              meetingId: currentMeetingId, title: formData.title, summary, transcription, attendees: formData.attendees
+        }); alert("Assets shared!"); } catch(e) {}
     }
     setShowShareModal(false); setView('list'); setStep(1); fetchMeetings(user.uid);
   };
@@ -233,7 +213,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col">
       
       {/* 🟢 FIXED NAVBAR */}
-      <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 sticky top-0 z-50 h-[72px]">
+      <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 sticky top-0 z-50 h-[72px] shadow-md">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
           <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-green-600 rounded-lg flex items-center justify-center font-bold text-black">M</div>
           <span className="font-bold text-lg tracking-tight">MeetMind</span>
@@ -253,45 +233,24 @@ export default function Dashboard() {
         {view === 'list' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
             <div className="flex justify-between items-end">
-              <div>
-                <h1 className="text-4xl font-bold mb-2">Meetings</h1>
-                <p className="text-gray-400">Manage your schedule and AI insights.</p>
-              </div>
-              <button onClick={() => { setView('create'); setStep(1); setFormData({title:'', startTime:'', endTime:'', description:'', attendees:'', polls:[]}); setCurrentMeetingId(null); setTranscription(''); setSummary(''); }} className="bg-green-600 hover:bg-green-500 text-black font-semibold px-6 py-3 rounded-lg flex items-center gap-2 transition-transform hover:scale-105">
-                <Plus size={20}/> New Meeting
-              </button>
+              <div><h1 className="text-4xl font-bold mb-2">Meetings</h1><p className="text-gray-400">Manage your schedule and AI insights.</p></div>
+              <button onClick={() => { setView('create'); setStep(1); setFormData({title:'', startTime:'', endTime:'', description:'', attendees:'', polls:[]}); setCurrentMeetingId(null); setTranscription(''); setSummary(''); }} className="bg-green-600 hover:bg-green-500 text-black font-semibold px-6 py-3 rounded-lg flex items-center gap-2 transition-transform hover:scale-105"><Plus size={20}/> New Meeting</button>
             </div>
-
             <div className="grid gap-4">
               {meetings.map((m) => {
                 const status = getMeetingStatus(m.startTime, m.endTime);
                 return (
                   <div key={m._id} onClick={() => { setFormData(m); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(m.summary || ''); setView('detail'); setActiveTab(m.summary ? 'summary' : 'upload'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
                     <div className="flex gap-4 items-center">
-                      <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center font-bold text-gray-400 group-hover:text-green-400 group-hover:bg-zinc-800/80 transition-all border border-white/5">
-                          {m.title.charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                          <h3 className="font-bold text-lg group-hover:text-green-400 transition-colors">{m.title}</h3>
-                          <p className="text-sm text-gray-500 flex items-center gap-2">
-                            <Calendar size={14} />
-                            {m.startTime ? new Date(m.startTime).toLocaleString() : m.date}
-                          </p>
-                      </div>
+                      <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center font-bold text-gray-400 group-hover:text-green-400 group-hover:bg-zinc-800/80 transition-all border border-white/5">{m.title.charAt(0).toUpperCase()}</div>
+                      <div><h3 className="font-bold text-lg group-hover:text-green-400 transition-colors">{m.title}</h3><p className="text-sm text-gray-500 flex items-center gap-2"><Calendar size={14} />{m.startTime ? new Date(m.startTime).toLocaleString() : m.date}</p></div>
                     </div>
-                    
                     <div className="flex items-center gap-3">
                       {status === 'completed' && <span className="px-3 py-1 bg-green-900/20 text-green-500 text-xs font-semibold rounded border border-green-900/30 flex items-center gap-1"><CheckCircle2 size={12}/> Completed</span>}
-                      {status === 'ongoing' && <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse"><Radio size={12}/> • Ongoing</span>}
+                      {status === 'ongoing' && <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse"><Radio size={12}/> Ongoing</span>}
                       {status === 'upcoming' && <span className="px-3 py-1 bg-zinc-800 text-gray-300 text-xs rounded border border-zinc-700 flex items-center gap-2"><Clock size={12}/> Upcoming</span>}
-
                       <span className="text-xs text-gray-500 flex items-center gap-1 mr-2"><Users size={12}/> {m.attendees ? m.attendees.split(',').length : 0}</span>
-
-                      {m.meetingLink && (
-                        <button onClick={(e) => copyToClipboard(m.meetingLink, e)} className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all" title="Copy Meeting Link">
-                          <LinkIcon size={16}/>
-                        </button>
-                      )}
+                      {m.meetingLink && <button onClick={(e) => { e.stopPropagation(); copyText(m.meetingLink); }} className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all"><LinkIcon size={16}/></button>}
                     </div>
                   </div>
                 );
@@ -318,7 +277,7 @@ export default function Dashboard() {
                     <input type="datetime-local" className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})}/>
                     <input type="datetime-local" className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm" value={formData.endTime} onChange={e => setFormData({...formData, endTime: e.target.value})}/>
                   </div>
-                  <textarea className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Agenda / Description" rows={3} value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})}/>
+                  <textarea className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Agenda" rows={3} value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})}/>
                   <input className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Attendees (emails)" value={formData.attendees} onChange={e => setFormData({...formData, attendees: e.target.value})}/>
                   <div className="flex justify-end pt-4 gap-3"><button onClick={() => setView('list')} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button><button onClick={handleNextStep1} disabled={loading} className="bg-green-600 hover:bg-green-500 text-black font-bold px-8 py-3 rounded-lg flex items-center gap-2">{loading ? 'Scheduling...' : 'Next >'}</button></div>
                 </div>
@@ -340,14 +299,14 @@ export default function Dashboard() {
            </motion.div>
         )}
 
-        {/* VIEW: DETAIL (CLEAN TABBED INTERFACE) */}
+        {/* VIEW: DETAIL (Premium Tabs) */}
         {view === 'detail' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full space-y-6 pb-20">
              
              {/* Header */}
              <div className="flex justify-between items-start border-b border-white/10 pb-6">
                 <div>
-                   <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to Dashboard</button>
+                   <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
                    <h2 className="text-3xl font-bold leading-tight">{formData.title}</h2>
                    <div className="flex items-center gap-4 text-sm text-gray-400 mt-2">
                        <span className="flex items-center gap-2"><Calendar size={14}/> {formData.startTime?.replace('T', ' ')}</span>
@@ -356,7 +315,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex gap-3">
                    {formData.meetingLink && (
-                     <button onClick={(e) => copyToClipboard(formData.meetingLink, e)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>
+                     <button onClick={() => copyText(formData.meetingLink)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>
                    )}
                    <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
                 </div>
@@ -365,10 +324,10 @@ export default function Dashboard() {
              {/* Content Grid */}
              <div className="grid grid-cols-12 gap-8 h-full">
                 
-                {/* Left Side Info */}
+                {/* Left Side */}
                 <div className="col-span-4 space-y-6">
                    <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                      <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda & Context</h3>
+                      <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
                       <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
                    </div>
                    {formData.polls && formData.polls.length > 0 && (
@@ -397,8 +356,13 @@ export default function Dashboard() {
                       {activeTab === 'summary' && (
                         <div className="h-full animate-in fade-in">
                            {summary ? (
-                             // ✅ CLEANED UP: No extra cards, direct prose text
-                             <div className="prose prose-invert prose-sm max-w-none text-gray-300 leading-relaxed prose-headings:text-green-400 prose-headings:mt-0 prose-headings:mb-4 prose-p:mb-4" dangerouslySetInnerHTML={{ __html: summary }} />
+                             <div className="h-full flex flex-col">
+                               <div className="flex justify-end gap-2 mb-4">
+                                 <button onClick={() => copyText(summary.replace(/<[^>]*>?/gm, ''))} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy Text</button>
+                                 <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export .txt</button>
+                               </div>
+                               <div className="ai-output text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
+                             </div>
                            ) : (
                              <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p><button onClick={() => setActiveTab('upload')} className="text-green-400 text-sm hover:underline mt-2">Go to Upload</button></div>
                            )}
@@ -406,10 +370,15 @@ export default function Dashboard() {
                       )}
 
                       {activeTab === 'transcript' && (
-                        <div className="h-full animate-in fade-in">
+                        <div className="h-full animate-in fade-in flex flex-col gap-4">
                            {transcription ? (
-                             // ✅ CLEANED UP: Simple text block
-                             <div className="font-mono text-xs leading-relaxed text-gray-400 whitespace-pre-wrap">{transcription}</div>
+                             <>
+                               <div className="flex items-center gap-2 bg-black/20 border border-white/5 rounded px-3 py-2">
+                                 <Search size={14} className="text-gray-500"/>
+                                 <input placeholder="Search keywords..." className="bg-transparent outline-none text-sm w-full" value={transcriptSearch} onChange={e => setTranscriptSearch(e.target.value)}/>
+                               </div>
+                               <div className="font-mono text-xs leading-relaxed text-gray-400 whitespace-pre-wrap">{filteredTranscript}</div>
+                             </>
                            ) : (
                              <div className="text-center py-20 text-gray-500"><Mic size={40} className="mx-auto mb-4 opacity-20"/><p>No transcript available.</p></div>
                            )}
@@ -441,6 +410,15 @@ export default function Dashboard() {
         )}
 
       </main>
+
+      {/* GLOBAL STYLE RESET FOR AI CONTENT */}
+      <style jsx global>{`
+        .ai-output * { margin: 0; padding: 0; }
+        .ai-output p { margin-bottom: 12px; }
+        .ai-output h1, .ai-output h2, .ai-output h3 { margin-top: 16px; margin-bottom: 8px; font-weight: 600; color: #4ade80; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.05em; }
+        .ai-output ul, .ai-output ol { padding-left: 20px; margin-bottom: 12px; }
+        .ai-output li { margin-bottom: 4px; }
+      `}</style>
 
       {/* Share Modal */}
       <AnimatePresence>
