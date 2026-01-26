@@ -1,5 +1,4 @@
 'use client';
-
 import { useState, useEffect, useMemo } from 'react';
 import { auth, provider, signInWithPopup, GoogleAuthProvider } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
@@ -210,11 +209,10 @@ export default function Dashboard() {
   if (!user) return <div className="bg-black h-screen flex items-center justify-center text-white">Loading...</div>;
 
   return (
-    // 🔴 FIX: h-screen and overflow-hidden on root prevents body scrollbar jump
-    <div className="h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col overflow-hidden">
+    <div className="min-h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col">
       
-      {/* NAVBAR: Fixed, no movement */}
-      <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 shrink-0 h-[72px] z-50 shadow-md">
+      {/* 🟢 FIXED NAVBAR (Standard, no hacks) */}
+      <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 sticky top-0 z-50 h-[72px] shadow-md">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
           <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-green-600 rounded-lg flex items-center justify-center font-bold text-black">M</div>
           <span className="font-bold text-lg tracking-tight">MeetMind</span>
@@ -227,13 +225,13 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      {/* MAIN: fills remaining height, contains views */}
-      <main className="flex-1 relative overflow-hidden">
+      {/* Main Content */}
+      <main className="flex-1 p-8 max-w-7xl mx-auto w-full">
         
-        {/* VIEW: LIST (Scrollable Container) */}
+        {/* VIEW: LIST */}
         {view === 'list' && (
-          <div className="absolute inset-0 overflow-y-auto p-8 max-w-7xl mx-auto w-full">
-            <div className="flex justify-between items-end mb-8">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+            <div className="flex justify-between items-end">
               <div><h1 className="text-4xl font-bold mb-2">Meetings</h1><p className="text-gray-400">Manage your schedule and AI insights.</p></div>
               <button onClick={() => { setView('create'); setStep(1); setFormData({title:'', startTime:'', endTime:'', description:'', attendees:'', polls:[]}); setCurrentMeetingId(null); setTranscription(''); setSummary(''); }} className="bg-green-600 hover:bg-green-500 text-black font-semibold px-6 py-3 rounded-lg flex items-center gap-2 transition-transform hover:scale-105"><Plus size={20}/> New Meeting</button>
             </div>
@@ -257,57 +255,55 @@ export default function Dashboard() {
                 );
               })}
             </div>
-          </div>
+          </motion.div>
         )}
 
-        {/* VIEW: CREATE (Scrollable Container) */}
+        {/* VIEW: CREATE WIZARD */}
         {view === 'create' && (
-           <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center">
-             <div className="w-full max-w-3xl">
-                <div className="mb-8 text-center"><h2 className="text-3xl font-bold mb-2">Create Your Meeting</h2></div>
-                <div className="flex justify-between items-center mb-10 px-10 relative">
-                  <div className="absolute top-1/2 left-0 w-full h-0.5 bg-zinc-800 -z-10"></div>
-                  <StepBadge num={1} label="Plan" active={step === 1} done={step > 1} />
-                  <StepBadge num={2} label="Assets" active={step === 2} done={step > 2} />
-                  <StepBadge num={3} label="AI & Final" active={step === 3} done={step > 3} />
+           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-3xl mx-auto">
+             <div className="mb-8 text-center"><h2 className="text-3xl font-bold mb-2">Create Your Meeting</h2></div>
+             <div className="flex justify-between items-center mb-10 px-10 relative">
+               <div className="absolute top-1/2 left-0 w-full h-0.5 bg-zinc-800 -z-10"></div>
+               <StepBadge num={1} label="Plan" active={step === 1} done={step > 1} />
+               <StepBadge num={2} label="Assets" active={step === 2} done={step > 2} />
+               <StepBadge num={3} label="AI & Final" active={step === 3} done={step > 3} />
+            </div>
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-2xl">
+              {step === 1 && (
+                <div className="space-y-6 animate-in fade-in">
+                  <input className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Title *" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})}/>
+                  <div className="grid grid-cols-2 gap-4">
+                    <input type="datetime-local" className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})}/>
+                    <input type="datetime-local" className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm" value={formData.endTime} onChange={e => setFormData({...formData, endTime: e.target.value})}/>
+                  </div>
+                  <textarea className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Agenda" rows={3} value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})}/>
+                  <input className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Attendees (emails)" value={formData.attendees} onChange={e => setFormData({...formData, attendees: e.target.value})}/>
+                  <div className="flex justify-end pt-4 gap-3"><button onClick={() => setView('list')} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button><button onClick={handleNextStep1} disabled={loading} className="bg-green-600 hover:bg-green-500 text-black font-bold px-8 py-3 rounded-lg flex items-center gap-2">{loading ? 'Scheduling...' : 'Next >'}</button></div>
                 </div>
-                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-2xl">
-                  {step === 1 && (
-                    <div className="space-y-6">
-                      <input className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Title *" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})}/>
-                      <div className="grid grid-cols-2 gap-4">
-                        <input type="datetime-local" className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})}/>
-                        <input type="datetime-local" className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm" value={formData.endTime} onChange={e => setFormData({...formData, endTime: e.target.value})}/>
-                      </div>
-                      <textarea className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Agenda" rows={3} value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})}/>
-                      <input className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Attendees (emails)" value={formData.attendees} onChange={e => setFormData({...formData, attendees: e.target.value})}/>
-                      <div className="flex justify-end pt-4 gap-3"><button onClick={() => setView('list')} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button><button onClick={handleNextStep1} disabled={loading} className="bg-green-600 hover:bg-green-500 text-black font-bold px-8 py-3 rounded-lg flex items-center gap-2">{loading ? 'Scheduling...' : 'Next >'}</button></div>
-                    </div>
-                  )}
-                  {step === 2 && (
-                    <div className="space-y-8">
-                      <div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center"><input type="file" className="hidden" id="ppt-upload" onChange={e => setPptFile(e.target.files[0])} /><label htmlFor="ppt-upload" className="cursor-pointer flex flex-col items-center"><Upload className="text-green-500 mb-2" size={24}/><span className="text-sm font-medium">{pptFile ? pptFile.name : "Select PDF/PPT"}</span></label></div>
-                      <div className="bg-black/40 border border-zinc-700 rounded-lg p-4"><input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Poll Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/><button onClick={() => setPollOptions([...pollOptions, ''])} className="text-xs text-green-500 mb-3">+ Add Option</button><button onClick={handleAddPoll} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm"><Plus size={14} className="inline"/> Add Poll</button></div>
-                      <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button><button onClick={() => setStep(3)} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg">Next &gt;</button></div>
-                    </div>
-                  )}
-                  {step === 3 && (
-                    <div className="space-y-6">
-                      <div className="border border-zinc-700 rounded-lg p-8 bg-black/40 flex flex-col items-center justify-center"><input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="mb-4 text-sm text-gray-400"/><button onClick={handleProcessAudio} disabled={loading} className="bg-white text-black font-bold px-6 py-3 rounded-lg flex items-center gap-2">{loading ? 'Processing...' : 'Generate Insights'}</button></div>
-                      <div className="flex justify-between pt-4"><button onClick={() => setStep(2)} className="text-gray-400">&lt; Back</button><button onClick={() => setShowShareModal(true)} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg">Finish &gt;</button></div>
-                    </div>
-                  )}
+              )}
+              {step === 2 && (
+                <div className="space-y-8 animate-in fade-in">
+                   <div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center"><input type="file" className="hidden" id="ppt-upload" onChange={e => setPptFile(e.target.files[0])} /><label htmlFor="ppt-upload" className="cursor-pointer flex flex-col items-center"><Upload className="text-green-500 mb-2" size={24}/><span className="text-sm font-medium">{pptFile ? pptFile.name : "Select PDF/PPT"}</span></label></div>
+                   <div className="bg-black/40 border border-zinc-700 rounded-lg p-4"><input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Poll Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/><button onClick={() => setPollOptions([...pollOptions, ''])} className="text-xs text-green-500 mb-3">+ Add Option</button><button onClick={handleAddPoll} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm"><Plus size={14} className="inline"/> Add Poll</button></div>
+                   <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button><button onClick={() => setStep(3)} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg">Next &gt;</button></div>
                 </div>
-             </div>
-           </div>
+              )}
+              {step === 3 && (
+                <div className="space-y-6 animate-in fade-in">
+                   <div className="border border-zinc-700 rounded-lg p-8 bg-black/40 flex flex-col items-center justify-center"><input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="mb-4 text-sm text-gray-400"/><button onClick={handleProcessAudio} disabled={loading} className="bg-white text-black font-bold px-6 py-3 rounded-lg flex items-center gap-2">{loading ? 'Processing...' : 'Generate Insights'}</button></div>
+                   <div className="flex justify-between pt-4"><button onClick={() => setStep(2)} className="text-gray-400">&lt; Back</button><button onClick={() => setShowShareModal(true)} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg">Finish &gt;</button></div>
+                </div>
+              )}
+            </div>
+           </motion.div>
         )}
 
-        {/* VIEW: DETAIL (FIXED HEIGHT CONTAINER) */}
+        {/* VIEW: DETAIL (FIXED SCROLL ISSUE) */}
         {view === 'detail' && (
-          <div className="absolute inset-0 flex flex-col p-8 max-w-7xl mx-auto w-full">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full space-y-6 pb-20">
              
-             {/* Header - Fixed Height */}
-             <div className="flex justify-between items-start border-b border-white/10 pb-6 shrink-0">
+             {/* Header */}
+             <div className="flex justify-between items-start border-b border-white/10 pb-6">
                 <div>
                    <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
                    <h2 className="text-3xl font-bold leading-tight">{formData.title}</h2>
@@ -317,16 +313,18 @@ export default function Dashboard() {
                    </div>
                 </div>
                 <div className="flex gap-3">
-                   {formData.meetingLink && <button onClick={() => copyText(formData.meetingLink)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>}
+                   {formData.meetingLink && (
+                     <button onClick={() => copyText(formData.meetingLink)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>
+                   )}
                    <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
                 </div>
              </div>
 
-             {/* Content Grid - Fills remaining height */}
-             <div className="grid grid-cols-12 gap-8 mt-6 flex-1 min-h-0">
+             {/* Content Grid */}
+             <div className="grid grid-cols-12 gap-8 h-full">
                 
-                {/* Left Side (Scrollable if needed) */}
-                <div className="col-span-4 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
+                {/* Left Side */}
+                <div className="col-span-4 space-y-6">
                    <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
                       <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
                       <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
@@ -339,10 +337,11 @@ export default function Dashboard() {
                    )}
                 </div>
 
-                {/* Right Side AI Hub (Fixed Height Container) */}
-                <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-full">
+                {/* Right Side AI Hub (Fixed Height + Internal Scroll) */}
+                {/* 🟢 CHANGE: h-[600px] ensures ONLY this box has scrollbars, not the page */}
+                <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[650px]">
                    
-                   {/* Tabs Header - Fixed Height */}
+                   {/* Tabs (Fixed Header) */}
                    <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
                       {['summary', 'transcript', 'upload'].map((tab) => (
                         <button key={tab} onClick={() => setActiveTab(tab)} className={`pb-4 px-4 text-sm font-medium transition-all relative capitalize ${activeTab === tab ? 'text-green-400' : 'text-gray-400 hover:text-white'}`}>
@@ -352,18 +351,19 @@ export default function Dashboard() {
                       ))}
                    </div>
 
-                   {/* 🔴 SCROLLING HAPPENS HERE ONLY */}
+                   {/* Tab Content (Scrollable Area) */}
+                   {/* 🟢 CHANGE: overflow-y-auto here handles the long text */}
                    <div className="p-8 flex-1 overflow-y-auto custom-scrollbar">
                       {activeTab === 'summary' && (
-                        <div className="h-full flex flex-col">
+                        <div className="h-full animate-in fade-in">
                            {summary ? (
-                             <>
+                             <div className="h-full flex flex-col">
                                <div className="flex justify-end gap-2 mb-4 shrink-0">
                                  <button onClick={() => copyText(summary.replace(/<[^>]*>?/gm, ''))} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy</button>
                                  <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export</button>
                                </div>
                                <div className="ai-output text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
-                             </>
+                             </div>
                            ) : (
                              <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p><button onClick={() => setActiveTab('upload')} className="text-green-400 text-sm hover:underline mt-2">Go to Upload</button></div>
                            )}
@@ -371,7 +371,7 @@ export default function Dashboard() {
                       )}
 
                       {activeTab === 'transcript' && (
-                        <div className="h-full flex flex-col gap-4">
+                        <div className="h-full flex flex-col gap-4 animate-in fade-in">
                            {transcription ? (
                              <>
                                <div className="flex items-center gap-2 bg-black/20 border border-white/5 rounded px-3 py-2 shrink-0">
@@ -387,7 +387,7 @@ export default function Dashboard() {
                       )}
 
                       {activeTab === 'upload' && (
-                        <div className="flex flex-col items-center justify-center h-full">
+                        <div className="flex flex-col items-center justify-center h-full space-y-6 animate-in fade-in">
                            {!summary ? (
                              <div className="w-full max-w-md border-2 border-dashed border-zinc-700 bg-black/20 rounded-xl p-8 flex flex-col items-center text-center">
                                 <div className="w-16 h-16 bg-zinc-800 rounded-full flex items-center justify-center mb-4"><Upload size={24} className="text-green-500"/></div>
@@ -407,12 +407,12 @@ export default function Dashboard() {
                    </div>
                 </div>
              </div>
-          </div>
+          </motion.div>
         )}
 
       </main>
 
-      {/* GLOBAL STYLE RESET FOR AI CONTENT (Removes unwanted padding) */}
+      {/* GLOBAL STYLE RESET FOR AI CONTENT */}
       <style jsx global>{`
         .ai-output * { margin: 0; padding: 0; }
         .ai-output p { margin-bottom: 12px; }
