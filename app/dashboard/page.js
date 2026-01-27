@@ -239,8 +239,8 @@ export default function Dashboard() {
   return (
     <div className="h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col overflow-hidden">
       
-      {/* FIXED NAVBAR - FULL WIDTH */}
-      <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 shrink-0 h-[72px] z-50 shadow-md w-full">
+      {/* NAVBAR */}
+      <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 shrink-0 h-[72px] z-50 shadow-md">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
           <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-green-600 rounded-lg flex items-center justify-center font-bold text-black">M</div>
           <span className="font-bold text-lg tracking-tight">MeetMind</span>
@@ -254,12 +254,12 @@ export default function Dashboard() {
       </nav>
 
       {/* MAIN CONTENT AREA */}
-      <main className="flex-1 relative overflow-hidden w-full">
+      <main className="flex-1 relative overflow-hidden">
         
-        {/* VIEW: LIST (FULL SCREEN WIDTH) */}
+        {/* VIEW: LIST (Centered Layout Restored) */}
         {view === 'list' && (
-          // 🟢 REMOVED: max-w-7xl mx-auto -> Now w-full
-          <div className="absolute inset-0 overflow-y-auto p-8 w-full custom-scrollbar">
+          // 🟢 RESTORED: max-w-7xl mx-auto
+          <div className="absolute inset-0 overflow-y-auto p-8 max-w-7xl mx-auto w-full custom-scrollbar">
             <div className="flex justify-between items-end mb-8">
               <div><h1 className="text-4xl font-bold mb-2">Meetings</h1><p className="text-gray-400">Manage your schedule and AI insights.</p></div>
               <button onClick={() => { setView('create'); setStep(1); setFormData({title:'', startTime:'', endTime:'', description:'', attendees:'', polls:[]}); setCurrentMeetingId(null); setTranscription(''); setSummary(''); }} className="bg-green-600 hover:bg-green-500 text-black font-semibold px-6 py-3 rounded-lg flex items-center gap-2 transition-transform hover:scale-105"><Plus size={20}/> New Meeting</button>
@@ -287,11 +287,10 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* VIEW: CREATE WIZARD */}
+        {/* VIEW: CREATE WIZARD (Centered Layout Restored) */}
         {view === 'create' && (
            <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center custom-scrollbar">
-             {/* Note: Wizard is usually better centered and limited width for readability */}
-             <div className="w-full max-w-4xl"> 
+             <div className="w-full max-w-3xl">
                 <div className="mb-8 text-center"><h2 className="text-3xl font-bold mb-2">Create Your Meeting</h2></div>
                 <div className="flex justify-between items-center mb-10 px-10 relative">
                   <div className="absolute top-1/2 left-0 w-full h-0.5 bg-zinc-800 -z-10"></div>
@@ -301,7 +300,7 @@ export default function Dashboard() {
                 </div>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-2xl">
                   {step === 1 && (
-                    <div className="space-y-6 animate-in fade-in">
+                    <div className="space-y-6">
                       <input className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Title *" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})}/>
                       <div className="grid grid-cols-2 gap-4">
                         <input type="datetime-local" className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})}/>
@@ -330,10 +329,10 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (FULL WIDTH) */}
+        {/* VIEW: DETAIL (Centered Layout Restored) */}
         {view === 'detail' && (
-          // 🟢 REMOVED: max-w-7xl mx-auto -> Now w-full
-          <div className="absolute inset-0 flex flex-col p-8 w-full">
+          // 🟢 RESTORED: max-w-7xl mx-auto
+          <div className="absolute inset-0 flex flex-col p-8 max-w-7xl mx-auto w-full">
              
              {/* Header */}
              <div className="flex justify-between items-start border-b border-white/10 pb-6 shrink-0">
@@ -388,8 +387,8 @@ export default function Dashboard() {
                            {summary ? (
                              <>
                                <div className="flex justify-end gap-2 mb-4 shrink-0 min-h-[32px]">
-                                 <button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy</button>
-                                 <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export</button>
+                                 <button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy Text</button>
+                                 <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export .txt</button>
                                </div>
                                <div className="ai-output text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
                              </>
@@ -441,7 +440,7 @@ export default function Dashboard() {
 
       </main>
 
-      {/* GLOBAL STYLE RESET FOR AI CONTENT + DARK SCROLLBAR */}
+      {/* GLOBAL STYLE RESET FOR AI CONTENT + BLACK SCROLLBAR TRACK */}
       <style jsx global>{`
         .ai-output * { margin: 0; padding: 0; }
         .ai-output p { margin-bottom: 12px; }
@@ -449,9 +448,9 @@ export default function Dashboard() {
         .ai-output ul, .ai-output ol { padding-left: 20px; margin-bottom: 12px; }
         .ai-output li { margin-bottom: 4px; }
         
-        /* 🔴 FORCE SCROLLBAR COLOR */
+        /* 🔴 FORCE SCROLLBAR TRACK TO BE BLACK (Fixes "White Space on Right" issue) */
         .custom-scrollbar::-webkit-scrollbar { width: 8px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #000; } /* Black Track */
+        .custom-scrollbar::-webkit-scrollbar-track { background: #000; } 
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #444; }
       `}</style>
