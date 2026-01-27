@@ -72,26 +72,19 @@ export default function Dashboard() {
   };
 
   // --- UTILS ---
-  
-  // 1. CLEANER: Removes HTML tags for Copy/Export
   const stripHtml = (html) => {
      if (!html) return '';
      const doc = new DOMParser().parseFromString(html, 'text/html');
      return doc.body.textContent || "";
   };
 
-  // 2. CLEANER: Removes Boilerplate for Display (Doctype, body tags)
   const cleanSummaryForDisplay = (text) => {
     if (!text) return '';
-    // Remove code blocks
     let clean = text.replace(/```html|```/gi, '');
-    
-    // Extract only what's inside <body> if present
     const bodyMatch = clean.match(/<body[^>]*>([\s\S]*)<\/body>/i);
     if (bodyMatch && bodyMatch[1]) {
       clean = bodyMatch[1];
     } else {
-      // Fallback: Remove specific tags if no body tag found
       clean = clean.replace(/<!DOCTYPE html>/gi, '')
                    .replace(/<html[^>]*>/gi, '')
                    .replace(/<\/html>/gi, '')
@@ -101,14 +94,12 @@ export default function Dashboard() {
   };
 
   const copyText = (content) => {
-    // Strip HTML before copying
     const plainText = stripHtml(content);
     navigator.clipboard.writeText(plainText);
     alert("Copied plain text to clipboard!");
   };
 
   const exportSummary = () => {
-    // Strip HTML before exporting
     const plainText = stripHtml(summary);
     const blob = new Blob([plainText], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -194,8 +185,17 @@ export default function Dashboard() {
     setPollQuestion(''); setPollOptions(['', '']);
   };
 
+  // ✅ FIXED: Connected to button & Saves PPT Name for Thumbnail
   const handleNextStep2 = async () => {
-    if (currentMeetingId) await axios.put('/api/meetings', { id: currentMeetingId, polls: formData.polls, pptUrl: pptFile ? "uploaded.pdf" : "" });
+    if (currentMeetingId) {
+      await axios.put('/api/meetings', { 
+        id: currentMeetingId, 
+        polls: formData.polls, 
+        // Using a Dummy Public PDF so you can see the thumbnail in extension
+        pptUrl: pptFile ? "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf" : "",
+        pptName: pptFile ? pptFile.name : "" 
+      });
+    }
     setStep(3);
   };
 
@@ -213,7 +213,6 @@ export default function Dashboard() {
       sumData.append("text", transRes.data.text);
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      // Save RAW HTML to DB (for rendering), Clean when displaying/copying
       const rawSummary = sumRes.data.summary; 
       const displaySummary = cleanSummaryForDisplay(rawSummary);
 
@@ -240,7 +239,6 @@ export default function Dashboard() {
   if (!user) return <div className="bg-black h-screen flex items-center justify-center text-white">Loading...</div>;
 
   return (
-    // 🟢 FIX 1: Lock body height and hide overflow to prevent full page scroll jump
     <div className="h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col overflow-hidden">
       
       {/* NAVBAR */}
@@ -318,7 +316,9 @@ export default function Dashboard() {
                     <div className="space-y-8">
                       <div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center"><input type="file" className="hidden" id="ppt-upload" onChange={e => setPptFile(e.target.files[0])} /><label htmlFor="ppt-upload" className="cursor-pointer flex flex-col items-center"><Upload className="text-green-500 mb-2" size={24}/><span className="text-sm font-medium">{pptFile ? pptFile.name : "Select PDF/PPT"}</span></label></div>
                       <div className="bg-black/40 border border-zinc-700 rounded-lg p-4"><input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Poll Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/><button onClick={() => setPollOptions([...pollOptions, ''])} className="text-xs text-green-500 mb-3">+ Add Option</button><button onClick={handleAddPoll} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm"><Plus size={14} className="inline"/> Add Poll</button></div>
-                      <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button><button onClick={() => setStep(3)} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg">Next &gt;</button></div>
+                      <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button>
+                      {/* ✅ FIX: Correct function call */}
+                      <button onClick={handleNextStep2} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg">Next &gt;</button></div>
                     </div>
                   )}
                   {step === 3 && (
@@ -332,7 +332,7 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (FIXED JUMP & COPY ISSUE) */}
+        {/* VIEW: DETAIL (Premium Tabs) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 max-w-7xl mx-auto w-full">
              
@@ -347,7 +347,7 @@ export default function Dashboard() {
                    </div>
                 </div>
                 <div className="flex gap-3">
-                   {formData.meetingLink && <button onClick={() => { navigator.clipboard.writeText(formData.meetingLink); alert("Link Copied!"); }} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>}
+                   {formData.meetingLink && <button onClick={() => copyText(formData.meetingLink)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>}
                    <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
                 </div>
              </div>
@@ -382,22 +382,20 @@ export default function Dashboard() {
                       ))}
                    </div>
 
-                   {/* 🟢 FIX 2: overflow-y-scroll + scrollbarGutter: stable prevents layout shift */}
+                   {/* Tab Content */}
                    <div className="p-8 flex-1 overflow-y-scroll custom-scrollbar" style={{ scrollbarGutter: "stable both-edges" }}>
-                      
                       {activeTab === 'summary' && (
                         <div className="h-full flex flex-col animate-in fade-in">
                            {summary ? (
                              <>
-                               {/* 🟢 FIX 3: Copy/Export Buttons using Cleaned Text */}
                                <div className="flex justify-end gap-2 mb-4 shrink-0 min-h-[32px]">
-                                 <button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy Text</button>
-                                 <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export .txt</button>
+                                 <button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy</button>
+                                 <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export</button>
                                </div>
                                <div className="ai-output text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
                              </>
                            ) : (
-                             <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p><button onClick={() => setActiveTab('upload')} className="text-green-400 text-sm hover:underline mt-2">Go to Upload</button></div>
+                             <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p></div>
                            )}
                         </div>
                       )}
@@ -420,20 +418,8 @@ export default function Dashboard() {
 
                       {activeTab === 'upload' && (
                         <div className="flex flex-col items-center justify-center h-full space-y-6 animate-in fade-in">
-                           {!summary ? (
-                             <div className="w-full max-w-md border-2 border-dashed border-zinc-700 bg-black/20 rounded-xl p-8 flex flex-col items-center text-center">
-                                <div className="w-16 h-16 bg-zinc-800 rounded-full flex items-center justify-center mb-4"><Upload size={24} className="text-green-500"/></div>
-                                <h4 className="font-semibold mb-2">Upload Meeting Recording</h4>
-                                <input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-600 file:text-black hover:file:bg-green-500 mb-4"/>
-                                <button onClick={handleProcessAudio} disabled={loading} className="w-full bg-white text-black font-bold py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-gray-200 disabled:opacity-50">{loading ? <span className="animate-spin">⏳</span> : <PlayCircle size={18}/>} {loading ? 'Processing...' : 'Generate Insights'}</button>
-                             </div>
-                           ) : (
-                             <div className="text-center space-y-4">
-                                <div className="w-16 h-16 bg-green-900/20 border border-green-500/50 rounded-full flex items-center justify-center mx-auto"><CheckCircle2 size={32} className="text-green-500"/></div>
-                                <h3 className="text-xl font-bold">Processing Complete</h3>
-                                <button onClick={() => setActiveTab('summary')} className="text-green-400 hover:underline">View Results</button>
-                             </div>
-                           )}
+                           <input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-600 file:text-black hover:file:bg-green-500 mb-4"/>
+                           <button onClick={handleProcessAudio} disabled={loading} className="w-full bg-white text-black font-bold py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-gray-200 disabled:opacity-50">{loading ? <span className="animate-spin">⏳</span> : <PlayCircle size={18}/>} {loading ? 'Processing...' : 'Generate Insights'}</button>
                         </div>
                       )}
                    </div>
@@ -444,7 +430,7 @@ export default function Dashboard() {
 
       </main>
 
-      {/* GLOBAL STYLE RESET FOR AI CONTENT (Cleaned output) */}
+      {/* GLOBAL STYLE RESET FOR AI CONTENT */}
       <style jsx global>{`
         .ai-output * { margin: 0; padding: 0; }
         .ai-output p { margin-bottom: 12px; }
