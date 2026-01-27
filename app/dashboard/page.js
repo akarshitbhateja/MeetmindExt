@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { auth, provider, signInWithPopup, GoogleAuthProvider } from '@/lib/firebase';
+import { auth, provider, signInWithPopup, GoogleAuthProvider, storage } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -195,17 +196,44 @@ export default function Dashboard() {
   };
 
   const handleNextStep2 = async () => {
-    if (currentMeetingId) {
+    if (!currentMeetingId) return;
+
+    setLoading(true); // Show loading state
+    let uploadedUrl = "";
+    let uploadedName = "";
+
+    try {
+      // ✅ UPLOAD LOGIC
+      if (pptFile) {
+        console.log("Uploading file...");
+        // Create a unique reference: meetings/{meetingId}/{filename}
+        const storageRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
+        
+        // Upload
+        const snapshot = await uploadBytes(storageRef, pptFile);
+        console.log("File uploaded!");
+
+        // Get Real URL
+        uploadedUrl = await getDownloadURL(snapshot.ref);
+        uploadedName = pptFile.name;
+      }
+
+      // ✅ SAVE REAL URL TO DB
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
-        // ✅ KEEP THIS: Dummy URL for testing the thumbnail
-        pptUrl: pptFile ? "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf" : "",
-        // ✅ ADD THIS LINE: Saves the exact file name (e.g. "MySlides.pdf")
-        pptName: pptFile ? pptFile.name : "" 
+        pptUrl: uploadedUrl,  // The Real Firebase Link
+        pptName: uploadedName // The Real Name
       });
+
+      setLoading(false);
+      setStep(3);
+
+    } catch (error) {
+      console.error("Upload failed:", error);
+      setLoading(false);
+      alert("Failed to upload presentation. Please try again.");
     }
-    setStep(3);
   };
 
   const handleProcessAudio = async () => {
