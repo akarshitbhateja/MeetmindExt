@@ -168,6 +168,17 @@ export default function Dashboard() {
   };
 
   // --- ACTIONS ---
+  
+  // 1. HELPER: Convert File to Base64 String
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
   const handleNextStep1 = async () => {
     if (!formData.title || !formData.startTime) { alert("Required fields missing."); return; }
     setLoading(true);
@@ -195,44 +206,41 @@ export default function Dashboard() {
     setPollQuestion(''); setPollOptions(['', '']);
   };
 
+  // 2. UPDATED FUNCTION: Save to MongoDB directly
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
 
-    setLoading(true); // Show loading state
-    let uploadedUrl = "";
-    let uploadedName = "";
+    setLoading(true);
+    let finalPptUrl = "";
+    let finalPptName = "";
 
     try {
-      // ✅ UPLOAD LOGIC
       if (pptFile) {
-        console.log("Uploading file...");
-        // Create a unique reference: meetings/{meetingId}/{filename}
-        const storageRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
-        
-        // Upload
-        const snapshot = await uploadBytes(storageRef, pptFile);
-        console.log("File uploaded!");
+        // Check file size (MongoDB limit is 16MB, let's be safe with 10MB)
+        if (pptFile.size > 10 * 1024 * 1024) {
+          throw new Error("File is too large for MongoDB storage (Max 10MB).");
+        }
 
-        // Get Real URL
-        uploadedUrl = await getDownloadURL(snapshot.ref);
-        uploadedName = pptFile.name;
+        console.log("Converting file to database format...");
+        finalPptUrl = await fileToBase64(pptFile); // Converts PDF to text string
+        finalPptName = pptFile.name;
       }
 
-      // ✅ SAVE REAL URL TO DB
+      // Save to MongoDB
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
-        pptUrl: uploadedUrl,  // The Real Firebase Link
-        pptName: uploadedName // The Real Name
+        pptUrl: finalPptUrl,  // This is now a very long text string
+        pptName: finalPptName 
       });
 
       setLoading(false);
       setStep(3);
 
     } catch (error) {
-      console.error("Upload failed:", error);
+      console.error("Save failed:", error);
       setLoading(false);
-      alert("Failed to upload presentation. Please try again.");
+      alert("Error: " + error.message);
     }
   };
 
