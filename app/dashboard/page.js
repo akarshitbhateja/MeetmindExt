@@ -199,8 +199,9 @@ export default function Dashboard() {
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
-        // ✅ SAVE REAL NAME & URL (Simulated URL for now)
-        pptUrl: pptFile ? "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf" : "", 
+        // ✅ KEEP THIS: Dummy URL for testing the thumbnail
+        pptUrl: pptFile ? "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf" : "",
+        // ✅ ADD THIS LINE: Saves the exact file name (e.g. "MySlides.pdf")
         pptName: pptFile ? pptFile.name : "" 
       });
     }
