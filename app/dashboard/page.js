@@ -163,7 +163,7 @@ export default function Dashboard() {
       reader.onerror = (error) => reject(error);
     });
   };
-
+  
   const handleNextStep1 = async () => {
     if (!formData.title || !formData.startTime) { alert("Required fields missing."); return; }
     setLoading(true);
@@ -203,7 +203,6 @@ export default function Dashboard() {
         if (pptFile.size > 10 * 1024 * 1024) {
           throw new Error("File is too large for MongoDB storage (Max 10MB).");
         }
-        console.log("Converting file to database format...");
         finalPptUrl = await fileToBase64(pptFile);
         finalPptName = pptFile.name;
       }
@@ -262,7 +261,6 @@ export default function Dashboard() {
   if (!user) return <div className="bg-black h-screen flex items-center justify-center text-white">Loading...</div>;
 
   return (
-    // 🟢 REVERTED: Standard scrolling layout
     <div className="min-h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col">
       
       {/* NAVBAR */}
@@ -402,7 +400,7 @@ export default function Dashboard() {
                       ))}
                    </div>
 
-                   {/* Tab Content (Scrollbar space reserved) */}
+                   {/* Tab Content */}
                    <div className="p-8 flex-1 overflow-y-scroll custom-scrollbar" style={{ scrollbarGutter: "stable both-edges" }}>
                       {activeTab === 'summary' && (
                         <div className="h-full flex flex-col animate-in fade-in">
@@ -419,6 +417,7 @@ export default function Dashboard() {
                            )}
                         </div>
                       )}
+
                       {activeTab === 'transcript' && (
                         <div className="h-full flex flex-col gap-4 animate-in fade-in">
                            {transcription ? (
@@ -434,6 +433,7 @@ export default function Dashboard() {
                            )}
                         </div>
                       )}
+
                       {activeTab === 'upload' && (
                         <div className="flex flex-col items-center justify-center h-full space-y-6 animate-in fade-in">
                            {!summary ? (
@@ -467,6 +467,7 @@ export default function Dashboard() {
         .ai-output ul, .ai-output ol { padding-left: 20px; margin-bottom: 12px; }
         .ai-output li { margin-bottom: 4px; }
         
+        /* 🟢 BLACK SCROLLBAR TRACK */
         .custom-scrollbar::-webkit-scrollbar { width: 8px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #000; } 
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
