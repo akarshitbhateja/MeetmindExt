@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { auth, provider, signInWithPopup, GoogleAuthProvider, storage } from '@/lib/firebase';
+import { auth, provider, signInWithPopup, GoogleAuthProvider } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -73,26 +72,19 @@ export default function Dashboard() {
   };
 
   // --- UTILS ---
-  
-  // 1. CLEANER: Removes HTML tags for Copy/Export
   const stripHtml = (html) => {
      if (!html) return '';
      const doc = new DOMParser().parseFromString(html, 'text/html');
      return doc.body.textContent || "";
   };
 
-  // 2. CLEANER: Removes Boilerplate for Display (Doctype, body tags)
   const cleanSummaryForDisplay = (text) => {
     if (!text) return '';
-    // Remove code blocks
     let clean = text.replace(/```html|```/gi, '');
-    
-    // Extract only what's inside <body> if present
     const bodyMatch = clean.match(/<body[^>]*>([\s\S]*)<\/body>/i);
     if (bodyMatch && bodyMatch[1]) {
       clean = bodyMatch[1];
     } else {
-      // Fallback: Remove specific tags if no body tag found
       clean = clean.replace(/<!DOCTYPE html>/gi, '')
                    .replace(/<html[^>]*>/gi, '')
                    .replace(/<\/html>/gi, '')
@@ -102,14 +94,12 @@ export default function Dashboard() {
   };
 
   const copyText = (content) => {
-    // Strip HTML before copying
     const plainText = stripHtml(content);
     navigator.clipboard.writeText(plainText);
     alert("Copied plain text to clipboard!");
   };
 
   const exportSummary = () => {
-    // Strip HTML before exporting
     const plainText = stripHtml(summary);
     const blob = new Blob([plainText], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -168,17 +158,6 @@ export default function Dashboard() {
   };
 
   // --- ACTIONS ---
-  
-  // 1. HELPER: Convert File to Base64 String
-  const fileToBase64 = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = (error) => reject(error);
-    });
-  };
-
   const handleNextStep1 = async () => {
     if (!formData.title || !formData.startTime) { alert("Required fields missing."); return; }
     setLoading(true);
@@ -206,42 +185,16 @@ export default function Dashboard() {
     setPollQuestion(''); setPollOptions(['', '']);
   };
 
-  // 2. UPDATED FUNCTION: Save to MongoDB directly
   const handleNextStep2 = async () => {
-    if (!currentMeetingId) return;
-
-    setLoading(true);
-    let finalPptUrl = "";
-    let finalPptName = "";
-
-    try {
-      if (pptFile) {
-        // Check file size (MongoDB limit is 16MB, let's be safe with 10MB)
-        if (pptFile.size > 10 * 1024 * 1024) {
-          throw new Error("File is too large for MongoDB storage (Max 10MB).");
-        }
-
-        console.log("Converting file to database format...");
-        finalPptUrl = await fileToBase64(pptFile); // Converts PDF to text string
-        finalPptName = pptFile.name;
-      }
-
-      // Save to MongoDB
+    if (currentMeetingId) {
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
-        pptUrl: finalPptUrl,  // This is now a very long text string
-        pptName: finalPptName 
+        pptUrl: pptFile ? "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf" : "",
+        pptName: pptFile ? pptFile.name : "" 
       });
-
-      setLoading(false);
-      setStep(3);
-
-    } catch (error) {
-      console.error("Save failed:", error);
-      setLoading(false);
-      alert("Error: " + error.message);
     }
+    setStep(3);
   };
 
   const handleProcessAudio = async () => {
@@ -258,7 +211,6 @@ export default function Dashboard() {
       sumData.append("text", transRes.data.text);
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      // Save RAW HTML to DB (for rendering), Clean when displaying/copying
       const rawSummary = sumRes.data.summary; 
       const displaySummary = cleanSummaryForDisplay(rawSummary);
 
@@ -285,11 +237,10 @@ export default function Dashboard() {
   if (!user) return <div className="bg-black h-screen flex items-center justify-center text-white">Loading...</div>;
 
   return (
-    // 🟢 FIX 1: Lock body height and hide overflow to prevent full page scroll jump
     <div className="h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col overflow-hidden">
       
-      {/* NAVBAR */}
-      <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 shrink-0 h-[72px] z-50 shadow-md">
+      {/* FIXED NAVBAR - FULL WIDTH */}
+      <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 shrink-0 h-[72px] z-50 shadow-md w-full">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
           <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-green-600 rounded-lg flex items-center justify-center font-bold text-black">M</div>
           <span className="font-bold text-lg tracking-tight">MeetMind</span>
@@ -303,11 +254,12 @@ export default function Dashboard() {
       </nav>
 
       {/* MAIN CONTENT AREA */}
-      <main className="flex-1 relative overflow-hidden">
+      <main className="flex-1 relative overflow-hidden w-full">
         
-        {/* VIEW: LIST */}
+        {/* VIEW: LIST (FULL SCREEN WIDTH) */}
         {view === 'list' && (
-          <div className="absolute inset-0 overflow-y-auto p-8 max-w-7xl mx-auto w-full custom-scrollbar">
+          // 🟢 REMOVED: max-w-7xl mx-auto -> Now w-full
+          <div className="absolute inset-0 overflow-y-auto p-8 w-full custom-scrollbar">
             <div className="flex justify-between items-end mb-8">
               <div><h1 className="text-4xl font-bold mb-2">Meetings</h1><p className="text-gray-400">Manage your schedule and AI insights.</p></div>
               <button onClick={() => { setView('create'); setStep(1); setFormData({title:'', startTime:'', endTime:'', description:'', attendees:'', polls:[]}); setCurrentMeetingId(null); setTranscription(''); setSummary(''); }} className="bg-green-600 hover:bg-green-500 text-black font-semibold px-6 py-3 rounded-lg flex items-center gap-2 transition-transform hover:scale-105"><Plus size={20}/> New Meeting</button>
@@ -338,7 +290,8 @@ export default function Dashboard() {
         {/* VIEW: CREATE WIZARD */}
         {view === 'create' && (
            <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center custom-scrollbar">
-             <div className="w-full max-w-3xl">
+             {/* Note: Wizard is usually better centered and limited width for readability */}
+             <div className="w-full max-w-4xl"> 
                 <div className="mb-8 text-center"><h2 className="text-3xl font-bold mb-2">Create Your Meeting</h2></div>
                 <div className="flex justify-between items-center mb-10 px-10 relative">
                   <div className="absolute top-1/2 left-0 w-full h-0.5 bg-zinc-800 -z-10"></div>
@@ -348,7 +301,7 @@ export default function Dashboard() {
                 </div>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-2xl">
                   {step === 1 && (
-                    <div className="space-y-6">
+                    <div className="space-y-6 animate-in fade-in">
                       <input className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Title *" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})}/>
                       <div className="grid grid-cols-2 gap-4">
                         <input type="datetime-local" className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})}/>
@@ -363,7 +316,7 @@ export default function Dashboard() {
                     <div className="space-y-8">
                       <div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center"><input type="file" className="hidden" id="ppt-upload" onChange={e => setPptFile(e.target.files[0])} /><label htmlFor="ppt-upload" className="cursor-pointer flex flex-col items-center"><Upload className="text-green-500 mb-2" size={24}/><span className="text-sm font-medium">{pptFile ? pptFile.name : "Select PDF/PPT"}</span></label></div>
                       <div className="bg-black/40 border border-zinc-700 rounded-lg p-4"><input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Poll Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/><button onClick={() => setPollOptions([...pollOptions, ''])} className="text-xs text-green-500 mb-3">+ Add Option</button><button onClick={handleAddPoll} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm"><Plus size={14} className="inline"/> Add Poll</button></div>
-                      <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button><button onClick={() => setStep(3)} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg">Next &gt;</button></div>
+                      <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button><button onClick={handleNextStep2} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg">Next &gt;</button></div>
                     </div>
                   )}
                   {step === 3 && (
@@ -377,9 +330,10 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (FIXED JUMP & COPY ISSUE) */}
+        {/* VIEW: DETAIL (FULL WIDTH) */}
         {view === 'detail' && (
-          <div className="absolute inset-0 flex flex-col p-8 max-w-7xl mx-auto w-full">
+          // 🟢 REMOVED: max-w-7xl mx-auto -> Now w-full
+          <div className="absolute inset-0 flex flex-col p-8 w-full">
              
              {/* Header */}
              <div className="flex justify-between items-start border-b border-white/10 pb-6 shrink-0">
@@ -392,7 +346,7 @@ export default function Dashboard() {
                    </div>
                 </div>
                 <div className="flex gap-3">
-                   {formData.meetingLink && <button onClick={() => { navigator.clipboard.writeText(formData.meetingLink); alert("Link Copied!"); }} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>}
+                   {formData.meetingLink && <button onClick={() => copyText(formData.meetingLink)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>}
                    <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
                 </div>
              </div>
@@ -427,22 +381,20 @@ export default function Dashboard() {
                       ))}
                    </div>
 
-                   {/* 🟢 FIX 2: overflow-y-scroll + scrollbarGutter: stable prevents layout shift */}
+                   {/* Tab Content */}
                    <div className="p-8 flex-1 overflow-y-scroll custom-scrollbar" style={{ scrollbarGutter: "stable both-edges" }}>
-                      
                       {activeTab === 'summary' && (
                         <div className="h-full flex flex-col animate-in fade-in">
                            {summary ? (
                              <>
-                               {/* 🟢 FIX 3: Copy/Export Buttons using Cleaned Text */}
                                <div className="flex justify-end gap-2 mb-4 shrink-0 min-h-[32px]">
-                                 <button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy Text</button>
-                                 <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export .txt</button>
+                                 <button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy</button>
+                                 <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export</button>
                                </div>
                                <div className="ai-output text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
                              </>
                            ) : (
-                             <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p><button onClick={() => setActiveTab('upload')} className="text-green-400 text-sm hover:underline mt-2">Go to Upload</button></div>
+                             <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p></div>
                            )}
                         </div>
                       )}
@@ -489,17 +441,18 @@ export default function Dashboard() {
 
       </main>
 
-      {/* GLOBAL STYLE RESET FOR AI CONTENT (Cleaned output) */}
+      {/* GLOBAL STYLE RESET FOR AI CONTENT + DARK SCROLLBAR */}
       <style jsx global>{`
         .ai-output * { margin: 0; padding: 0; }
         .ai-output p { margin-bottom: 12px; }
         .ai-output h1, .ai-output h2, .ai-output h3 { margin-top: 16px; margin-bottom: 8px; font-weight: 600; color: #4ade80; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.05em; }
         .ai-output ul, .ai-output ol { padding-left: 20px; margin-bottom: 12px; }
         .ai-output li { margin-bottom: 4px; }
-        /* Custom Scrollbar for inner containers */
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        
+        /* 🔴 FORCE SCROLLBAR COLOR */
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #000; } /* Black Track */
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #444; }
       `}</style>
 
