@@ -1,32 +1,39 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
-// ✅ Import Storage functions
-import { auth, provider, signInWithPopup, GoogleAuthProvider, storage } from '@/lib/firebase';
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage"; 
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { auth, provider, signInWithPopup, GoogleAuthProvider } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+// ✅ Import PDFJS for Thumbnails
+import * as pdfjsLib from 'pdfjs-dist/build/pdf';
+import 'pdfjs-dist/build/pdf.worker.entry'; 
+
 import { 
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
-  PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download
+  PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2
 } from 'lucide-react';
+
+// Set worker source for PDF.js (Required for Next.js)
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+// ... (Imports for Firebase Storage remain same)
+import { storage } from '@/lib/firebase';
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 export default function Dashboard() {
 
-  // --- STATE ---
   const [user, setUser] = useState(null);
   const [meetings, setMeetings] = useState([]);
   const [view, setView] = useState('list'); 
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false); // Spinner state
+  const [uploading, setUploading] = useState(false);
 
-  // Wizard & Meeting Data
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
-    title: '', startTime: '', endTime: '', description: '', attendees: '', pptUrl: '', polls: []
+    title: '', startTime: '', endTime: '', description: '', attendees: '', pptUrl: '', pptThumbnail: '', polls: []
   });
   const [currentMeetingId, setCurrentMeetingId] = useState(null);
 
@@ -34,15 +41,15 @@ export default function Dashboard() {
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
 
-  // AI & Assets
+  // Assets
   const [activeTab, setActiveTab] = useState('summary'); 
   const [audioFile, setAudioFile] = useState(null);
   const [pptFile, setPptFile] = useState(null);
+  const [pptPreview, setPptPreview] = useState(null); // ✅ Store Thumbnail Preview
+  
   const [transcription, setTranscription] = useState('');
   const [summary, setSummary] = useState('');
   const [transcriptSearch, setTranscriptSearch] = useState('');
-
-  // Modals
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareOptions, setShareOptions] = useState({ video: true, notes: true, ppt: true });
 
@@ -75,7 +82,27 @@ export default function Dashboard() {
   };
 
   // --- UTILS ---
-  // (Removed fileToBase64 - No longer needed)
+  // ✅ 1. Thumbnail Generator Function
+  const generateThumbnail = async (file) => {
+    try {
+      const fileUrl = URL.createObjectURL(file);
+      const loadingTask = pdfjsLib.getDocument(fileUrl);
+      const pdf = await loadingTask.promise;
+      const page = await pdf.getPage(1); // Get Page 1
+      
+      const viewport = page.getViewport({ scale: 0.5 }); // Scale down for thumbnail
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+
+      await page.render({ canvasContext: context, viewport: viewport }).promise;
+      return canvas.toDataURL('image/jpeg', 0.8); // Return Base64 Image
+    } catch (error) {
+      console.error("Thumbnail error:", error);
+      return null;
+    }
+  };
 
   const stripHtml = (html) => {
      if (!html) return '';
@@ -87,21 +114,15 @@ export default function Dashboard() {
     if (!text) return '';
     let clean = text.replace(/```html|```/gi, '');
     const bodyMatch = clean.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-    if (bodyMatch && bodyMatch[1]) {
-      clean = bodyMatch[1];
-    } else {
-      clean = clean.replace(/<!DOCTYPE html>/gi, '')
-                   .replace(/<html[^>]*>/gi, '')
-                   .replace(/<\/html>/gi, '')
-                   .replace(/<head>[\s\S]*?<\/head>/gi, '');
-    }
+    if (bodyMatch && bodyMatch[1]) clean = bodyMatch[1];
+    else clean = clean.replace(/<!DOCTYPE html>/gi, '').replace(/<html[^>]*>/gi, '').replace(/<\/html>/gi, '').replace(/<head>[\s\S]*?<\/head>/gi, '');
     return clean.trim();
   };
 
   const copyText = (content) => {
     const plainText = stripHtml(content);
     navigator.clipboard.writeText(plainText);
-    alert("Copied plain text to clipboard!");
+    alert("Copied!");
   };
 
   const exportSummary = () => {
@@ -110,7 +131,7 @@ export default function Dashboard() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${formData.title.replace(/\s+/g, '_')}_summary.txt`;
+    a.download = `${formData.title}_summary.txt`;
     a.click();
   };
 
@@ -124,9 +145,7 @@ export default function Dashboard() {
 
   const filteredTranscript = useMemo(() => {
     if (!transcriptSearch) return transcription;
-    return transcription.split('\n').filter(line => 
-      line.toLowerCase().includes(transcriptSearch.toLowerCase())
-    ).join('\n___\n');
+    return transcription.split('\n').filter(line => line.toLowerCase().includes(transcriptSearch.toLowerCase())).join('\n___\n');
   }, [transcriptSearch, transcription]);
 
   // --- GOOGLE CALENDAR ---
@@ -140,7 +159,6 @@ export default function Dashboard() {
         sessionStorage.setItem('google_access_token', token);
       } catch (e) { alert("Calendar access required."); return null; }
     }
-
     const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const event = {
       summary: meetingData.title,
@@ -151,7 +169,6 @@ export default function Dashboard() {
       reminders: { useDefault: false, overrides: [{ method: 'email', minutes: 30 }, { method: 'popup', minutes: 10 }] },
       conferenceData: { createRequest: { requestId: Math.random().toString(36).substring(7) } }
     };
-
     try {
       const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, {
         method: "POST", headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(event)
@@ -162,18 +179,19 @@ export default function Dashboard() {
     } catch (error) { alert("Schedule failed: " + error.message); return null; }
   };
 
-  // --- ACTIONS ---
+  // --- WIZARD ACTIONS ---
   const handleNextStep1 = async () => {
-    if (!formData.title || !formData.startTime) { alert("Required fields missing."); return; }
+    if (!formData.title || !formData.startTime || !formData.endTime) return alert("Fill all details.");
+    if (new Date(formData.startTime) >= new Date(formData.endTime)) return alert("End time must be after start time.");
+    
     setLoading(true);
     const calendarLink = await createGoogleCalendarEvent(formData);
     if (!calendarLink) { setLoading(false); return; }
 
     const meetingData = { ...formData, userId: user.uid, meetingLink: calendarLink };
     try {
-      let res;
       if (!currentMeetingId) {
-        res = await axios.post('/api/meetings', meetingData);
+        const res = await axios.post('/api/meetings', meetingData);
         setCurrentMeetingId(res.data.data._id);
       } else {
         await axios.put('/api/meetings', { id: currentMeetingId, ...meetingData });
@@ -183,47 +201,69 @@ export default function Dashboard() {
     setLoading(false);
   };
 
-  const handleAddPoll = () => {
-    if(!pollQuestion) return;
-    const newPoll = { question: pollQuestion, options: pollOptions.filter(o => o !== '') };
+  // ✅ FIXED POLLS LOGIC
+  const handlePollOptionChange = (index, value) => {
+    const newOptions = [...pollOptions];
+    newOptions[index] = value;
+    setPollOptions(newOptions);
+  };
+
+  const addPollOptionField = () => {
+    setPollOptions([...pollOptions, '']);
+  };
+
+  const savePollToLocal = () => {
+    if (!pollQuestion.trim()) return alert("Enter question");
+    const validOptions = pollOptions.filter(opt => opt.trim() !== "");
+    if (validOptions.length < 2) return alert("Need 2+ options");
+
+    const newPoll = { question: pollQuestion, options: validOptions };
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
     setPollQuestion(''); setPollOptions(['', '']);
   };
 
+  const deletePoll = (index) => {
+    const newPolls = [...formData.polls];
+    newPolls.splice(index, 1);
+    setFormData({ ...formData, polls: newPolls });
+  };
+
+  // ✅ UPDATED: Upload + Thumbnail Generation
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
-    setUploading(true); // Spinner ON
-
+    setUploading(true); 
+    
     let uploadedUrl = "";
     let uploadedName = "";
+    let thumbnailUrl = "";
 
     try {
       if (pptFile) {
-        // ✅ 1. Upload to Firebase Storage
+        // 1. Generate Thumbnail (Client Side)
+        console.log("Generating thumbnail...");
+        thumbnailUrl = await generateThumbnail(pptFile);
+        setPptPreview(thumbnailUrl); // Show locally
+
+        // 2. Upload PDF to Firebase Storage
+        console.log("Uploading file...");
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
         const snapshot = await uploadBytes(fileRef, pptFile);
-        
-        // ✅ 2. Get Public URL
         uploadedUrl = await getDownloadURL(snapshot.ref);
         uploadedName = pptFile.name;
-        
-        console.log("Uploaded URL:", uploadedUrl);
       }
 
-      // ✅ 3. Save URL to MongoDB
+      // 3. Save Both URL & Thumbnail Base64 to MongoDB
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
         pptUrl: uploadedUrl,
-        pptName: uploadedName 
+        pptName: uploadedName,
+        pptThumbnail: thumbnailUrl // ✅ Saving Thumbnail
       });
       
       setStep(3);
-    } catch (e) { 
-        console.error(e);
-        alert("Upload failed: " + e.message); 
-    }
-    setUploading(false); // Spinner OFF
+    } catch (e) { alert("Upload failed: " + e.message); }
+    setUploading(false);
   };
 
   const handleProcessAudio = async () => {
@@ -240,9 +280,7 @@ export default function Dashboard() {
       sumData.append("text", transRes.data.text);
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      const rawSummary = sumRes.data.summary; 
-      const displaySummary = cleanSummaryForDisplay(rawSummary);
-
+      const displaySummary = cleanSummaryForDisplay(sumRes.data.summary);
       setTranscription(transRes.data.text);
       setSummary(displaySummary);
 
@@ -258,7 +296,7 @@ export default function Dashboard() {
     if (process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK) {
         try { await axios.post(process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK, {
               meetingId: currentMeetingId, title: formData.title, summary: stripHtml(summary), transcription, attendees: formData.attendees
-        }); alert("Assets shared!"); } catch(e) {}
+        }); alert("Shared!"); } catch(e) {}
     }
     setShowShareModal(false); setView('list'); setStep(1); fetchMeetings(user.uid);
   };
@@ -268,7 +306,6 @@ export default function Dashboard() {
   return (
     <div className="h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col overflow-hidden">
       
-      {/* NAVBAR */}
       <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 shrink-0 h-[72px] z-50 shadow-md">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
           <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-green-600 rounded-lg flex items-center justify-center font-bold text-black">M</div>
@@ -282,22 +319,20 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      {/* MAIN CONTENT AREA */}
       <main className="flex-1 relative overflow-hidden">
         
-        {/* VIEW: LIST */}
         {view === 'list' && (
           <div className="absolute inset-0 overflow-y-auto p-8 custom-scrollbar">
             <div className="max-w-7xl mx-auto w-full">
                 <div className="flex justify-between items-end mb-8">
                 <div><h1 className="text-4xl font-bold mb-2">Meetings</h1><p className="text-gray-400">Manage your schedule and AI insights.</p></div>
-                <button onClick={() => { setView('create'); setStep(1); setFormData({title:'', startTime:'', endTime:'', description:'', attendees:'', polls:[]}); setCurrentMeetingId(null); setTranscription(''); setSummary(''); }} className="bg-green-600 hover:bg-green-500 text-black font-semibold px-6 py-3 rounded-lg flex items-center gap-2 transition-transform hover:scale-105"><Plus size={20}/> New Meeting</button>
+                <button onClick={() => { setView('create'); setStep(1); setFormData({title:'', startTime:'', endTime:'', description:'', attendees:'', polls:[], pptThumbnail:''}); setPptPreview(null); setCurrentMeetingId(null); setTranscription(''); setSummary(''); }} className="bg-green-600 hover:bg-green-500 text-black font-semibold px-6 py-3 rounded-lg flex items-center gap-2 transition-transform hover:scale-105"><Plus size={20}/> New Meeting</button>
                 </div>
                 <div className="grid gap-4">
                 {meetings.map((m) => {
                     const status = getMeetingStatus(m.startTime, m.endTime);
                     return (
-                    <div key={m._id} onClick={() => { setFormData(m); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(cleanSummaryForDisplay(m.summary) || ''); setView('detail'); setActiveTab(m.summary ? 'summary' : 'upload'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
+                    <div key={m._id} onClick={() => { setFormData(m); setPptPreview(m.pptThumbnail); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(cleanSummaryForDisplay(m.summary) || ''); setView('detail'); setActiveTab(m.summary ? 'summary' : 'upload'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
                         <div className="flex gap-4 items-center">
                         <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center font-bold text-gray-400 group-hover:text-green-400 group-hover:bg-zinc-800/80 transition-all border border-white/5">{m.title.charAt(0).toUpperCase()}</div>
                         <div><h3 className="font-bold text-lg group-hover:text-green-400 transition-colors">{m.title}</h3><p className="text-sm text-gray-500 flex items-center gap-2"><Calendar size={14} />{m.startTime ? new Date(m.startTime).toLocaleString() : m.date}</p></div>
@@ -317,16 +352,16 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* VIEW: CREATE WIZARD */}
+        {/* VIEW: WIZARD */}
         {view === 'create' && (
            <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center custom-scrollbar">
              <div className="w-full max-w-3xl">
                 <div className="mb-8 text-center"><h2 className="text-3xl font-bold mb-2">Create Your Meeting</h2></div>
                 <div className="flex justify-between items-center mb-10 px-10 relative">
                   <div className="absolute top-1/2 left-0 w-full h-0.5 bg-zinc-800 -z-10"></div>
-                  <StepBadge num={1} label="Plan" active={step === 1} done={step > 1} />
-                  <StepBadge num={2} label="Assets" active={step === 2} done={step > 2} />
-                  <StepBadge num={3} label="AI & Final" active={step === 3} done={step > 3} />
+                  <div className={`flex flex-col items-center z-10`}><div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border-2 ${step>=1 ? 'bg-green-500 border-green-500 text-black' : 'bg-black border-zinc-700 text-zinc-500'}`}>1</div><span className="text-xs mt-1">Plan</span></div>
+                  <div className={`flex flex-col items-center z-10`}><div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border-2 ${step>=2 ? 'bg-green-500 border-green-500 text-black' : 'bg-black border-zinc-700 text-zinc-500'}`}>2</div><span className="text-xs mt-1">Assets</span></div>
+                  <div className={`flex flex-col items-center z-10`}><div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border-2 ${step>=3 ? 'bg-green-500 border-green-500 text-black' : 'bg-black border-zinc-700 text-zinc-500'}`}>3</div><span className="text-xs mt-1">AI</span></div>
                 </div>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-2xl">
                   {step === 1 && (
@@ -338,26 +373,51 @@ export default function Dashboard() {
                       </div>
                       <textarea className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Agenda" rows={3} value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})}/>
                       <input className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Attendees (emails)" value={formData.attendees} onChange={e => setFormData({...formData, attendees: e.target.value})}/>
-                      <div className="flex justify-end pt-4 gap-3"><button onClick={() => setView('list')} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button><button onClick={handleNextStep1} disabled={loading} className="bg-green-600 hover:bg-green-500 text-black font-bold px-8 py-3 rounded-lg flex items-center gap-2">{loading ? 'Scheduling...' : 'Next >'}</button></div>
+                      <div className="flex justify-end pt-4 gap-3"><button onClick={() => setView('list')} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button><button onClick={handleNextStep1} disabled={loading} className="bg-green-600 hover:bg-green-500 text-black font-bold px-8 py-3 rounded-lg">{loading ? 'Scheduling...' : 'Next >'}</button></div>
                     </div>
                   )}
                   {step === 2 && (
-                    <div className="space-y-8">
-                      {/* Upload Box with Spinner */}
-                      <div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center">
+                    <div className="space-y-8 animate-in fade-in">
+                      {/* ✅ FIX: Show Thumbnail After Upload */}
+                      <div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center min-h-[150px] justify-center">
                         {uploading ? (
-                            <div className="flex flex-col items-center justify-center">
-                                <div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                                <span className="text-sm text-green-400">Uploading to Firebase...</span>
+                            <div className="flex flex-col items-center"><div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-2"></div><span className="text-sm text-green-400">Processing PDF...</span></div>
+                        ) : pptPreview ? (
+                            <div className="relative w-full h-40 bg-zinc-800 rounded-lg overflow-hidden flex flex-col items-center">
+                                <img src={pptPreview} alt="Slide 1" className="h-full object-contain" />
+                                <div className="absolute bottom-0 w-full bg-black/70 text-xs p-2 text-center text-white">{pptFile?.name || "Uploaded File"}</div>
                             </div>
                         ) : (
                             <>
-                                <input type="file" className="hidden" id="ppt-upload" onChange={e => setPptFile(e.target.files[0])} />
-                                <label htmlFor="ppt-upload" className="cursor-pointer flex flex-col items-center"><Upload className="text-green-500 mb-2" size={24}/><span className="text-sm font-medium">{pptFile ? pptFile.name : "Select PDF/PPT"}</span></label>
+                                <input type="file" accept="application/pdf" className="hidden" id="ppt-upload" onChange={e => setPptFile(e.target.files[0])} />
+                                <label htmlFor="ppt-upload" className="cursor-pointer flex flex-col items-center gap-2"><Upload className="text-green-500 mb-2" size={32}/><span className="text-sm font-medium">{pptFile ? pptFile.name : "Select Presentation (PDF)"}</span></label>
                             </>
                         )}
                       </div>
-                      <div className="bg-black/40 border border-zinc-700 rounded-lg p-4"><input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Poll Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/><button onClick={() => setPollOptions([...pollOptions, ''])} className="text-xs text-green-500 mb-3">+ Add Option</button><button onClick={handleAddPoll} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm"><Plus size={14} className="inline"/> Add Poll</button></div>
+
+                      {/* ✅ FIX: Polls Form */}
+                      <div className="bg-black/40 border border-zinc-700 rounded-lg p-4">
+                          <h4 className="text-sm font-semibold mb-3">Create Poll</h4>
+                          <input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/>
+                          {pollOptions.map((opt, i) => (
+                            <input key={i} className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder={`Option ${i+1}`} value={opt} onChange={e => handlePollOptionChange(i, e.target.value)}/>
+                          ))}
+                          <button onClick={addPollOptionField} className="text-xs text-green-500 mb-4 hover:underline block">+ Add Option</button>
+                          <button onClick={savePollToLocal} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm flex items-center justify-center gap-2"><Plus size={14}/> Add Poll</button>
+                      </div>
+                      
+                      {/* Saved Polls List */}
+                      {formData.polls.length > 0 && (
+                          <div className="space-y-2">
+                              {formData.polls.map((p, i) => (
+                                  <div key={i} className="bg-zinc-900 px-3 py-2 rounded flex justify-between items-center border border-zinc-800">
+                                      <span className="text-sm">{p.question}</span>
+                                      <button onClick={() => deletePoll(i)} className="text-gray-500 hover:text-red-500"><Trash2 size={14}/></button>
+                                  </div>
+                              ))}
+                          </div>
+                      )}
+
                       <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button><button onClick={handleNextStep2} disabled={uploading} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg disabled:opacity-50">Next &gt;</button></div>
                     </div>
                   )}
@@ -397,6 +457,15 @@ export default function Dashboard() {
                         <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
                         <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
                     </div>
+                    {/* PPT Preview in Detail View */}
+                    {formData.pptThumbnail && (
+                        <div className="bg-zinc-900/50 border border-white/10 p-4 rounded-2xl">
+                            <h3 className="font-semibold mb-3 text-white/80 uppercase text-xs tracking-wider">Presentation</h3>
+                            <div className="rounded-lg overflow-hidden border border-zinc-800 cursor-pointer hover:border-green-500 transition" onClick={() => window.open(formData.pptUrl, '_blank')}>
+                                <img src={formData.pptThumbnail} className="w-full h-auto" alt="PPT Preview" />
+                            </div>
+                        </div>
+                    )}
                     {formData.polls && formData.polls.length > 0 && (
                         <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
                             <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
@@ -406,64 +475,51 @@ export default function Dashboard() {
                     </div>
 
                     <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
-                    <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
-                        {['summary', 'transcript', 'upload'].map((tab) => (
-                            <button key={tab} onClick={() => setActiveTab(tab)} className={`pb-4 px-4 text-sm font-medium transition-all relative capitalize ${activeTab === tab ? 'text-green-400' : 'text-gray-400 hover:text-white'}`}>
-                            {tab === 'upload' ? 'Recording / Upload' : tab}
-                            {activeTab === tab && <motion.div layoutId="underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-green-400"/>}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="p-8 flex-1 overflow-y-scroll custom-scrollbar" style={{ scrollbarGutter: "stable both-edges" }}>
-                        {activeTab === 'summary' && (
-                            <div className="h-full flex flex-col animate-in fade-in">
-                            {summary ? (
-                                <>
-                                <div className="flex justify-end gap-2 mb-4 shrink-0 min-h-[32px]">
-                                    <button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy Text</button>
-                                    <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export</button>
-                                </div>
-                                <div className="ai-output text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
-                                </>
-                            ) : (
-                                <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p></div>
-                            )}
-                            </div>
-                        )}
-                        {activeTab === 'transcript' && (
-                            <div className="h-full flex flex-col gap-4 animate-in fade-in">
-                            {transcription ? (
-                                <>
-                                <div className="flex items-center gap-2 bg-black/20 border border-white/5 rounded px-3 py-2 shrink-0 min-h-[40px]">
-                                    <Search size={14} className="text-gray-500"/>
-                                    <input placeholder="Search keywords..." className="bg-transparent outline-none text-sm w-full" value={transcriptSearch} onChange={e => setTranscriptSearch(e.target.value)}/>
-                                </div>
-                                <div className="font-mono text-xs leading-relaxed text-gray-400 whitespace-pre-wrap">{filteredTranscript}</div>
-                                </>
-                            ) : (
-                                <div className="text-center py-20 text-gray-500"><Mic size={40} className="mx-auto mb-4 opacity-20"/><p>No transcript available.</p></div>
-                            )}
-                            </div>
-                        )}
-                        {activeTab === 'upload' && (
-                            <div className="flex flex-col items-center justify-center h-full space-y-6 animate-in fade-in">
-                            {!summary ? (
-                                <div className="w-full max-w-md border-2 border-dashed border-zinc-700 bg-black/20 rounded-xl p-8 flex flex-col items-center text-center">
-                                <div className="w-16 h-16 bg-zinc-800 rounded-full flex items-center justify-center mb-4"><Upload size={24} className="text-green-500"/></div>
-                                <h4 className="font-semibold mb-2">Upload Meeting Recording</h4>
-                                <input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-600 file:text-black hover:file:bg-green-500 mb-4"/>
-                                <button onClick={handleProcessAudio} disabled={loading} className="w-full bg-white text-black font-bold py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-gray-200 disabled:opacity-50">{loading ? <span className="animate-spin">⏳</span> : <PlayCircle size={18}/>} {loading ? 'Processing...' : 'Generate Insights'}</button>
-                                </div>
-                            ) : (
-                                <div className="text-center space-y-4">
-                                <div className="w-16 h-16 bg-green-900/20 border border-green-500/50 rounded-full flex items-center justify-center mx-auto"><CheckCircle2 size={32} className="text-green-500"/></div>
-                                <h3 className="text-xl font-bold">Processing Complete</h3>
-                                <button onClick={() => setActiveTab('summary')} className="text-green-400 hover:underline">View Results</button>
+                        <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
+                            {['summary', 'transcript', 'upload'].map((tab) => (
+                                <button key={tab} onClick={() => setActiveTab(tab)} className={`pb-4 px-4 text-sm font-medium transition-all relative capitalize ${activeTab === tab ? 'text-green-400' : 'text-gray-400 hover:text-white'}`}>{tab}{activeTab === tab && <motion.div layoutId="underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-green-400"/>}</button>
+                            ))}
+                        </div>
+                        <div className="p-8 flex-1 overflow-y-scroll custom-scrollbar" style={{ scrollbarGutter: "stable both-edges" }}>
+                            {activeTab === 'summary' && (
+                                <div className="h-full flex flex-col animate-in fade-in">
+                                {summary ? (
+                                    <>
+                                    <div className="flex justify-end gap-2 mb-4 shrink-0 min-h-[32px]"><button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy Text</button><button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export</button></div>
+                                    <div className="ai-output text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
+                                    </>
+                                ) : <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p></div>}
                                 </div>
                             )}
-                            </div>
-                        )}
-                    </div>
+                            {activeTab === 'transcript' && (
+                                <div className="h-full flex flex-col gap-4 animate-in fade-in">
+                                {transcription ? (
+                                    <>
+                                    <div className="flex items-center gap-2 bg-black/20 border border-white/5 rounded px-3 py-2 shrink-0 min-h-[40px]"><Search size={14} className="text-gray-500"/><input placeholder="Search keywords..." className="bg-transparent outline-none text-sm w-full" value={transcriptSearch} onChange={e => setTranscriptSearch(e.target.value)}/></div>
+                                    <div className="font-mono text-xs leading-relaxed text-gray-400 whitespace-pre-wrap">{filteredTranscript}</div>
+                                    </>
+                                ) : <div className="text-center py-20 text-gray-500"><Mic size={40} className="mx-auto mb-4 opacity-20"/><p>No transcript available.</p></div>}
+                                </div>
+                            )}
+                            {activeTab === 'upload' && (
+                                <div className="flex flex-col items-center justify-center h-full space-y-6 animate-in fade-in">
+                                {!summary ? (
+                                    <div className="w-full max-w-md border-2 border-dashed border-zinc-700 bg-black/20 rounded-xl p-8 flex flex-col items-center text-center">
+                                    <div className="w-16 h-16 bg-zinc-800 rounded-full flex items-center justify-center mb-4"><Upload size={24} className="text-green-500"/></div>
+                                    <h4 className="font-semibold mb-2">Upload Meeting Recording</h4>
+                                    <input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-600 file:text-black hover:file:bg-green-500 mb-4"/>
+                                    <button onClick={handleProcessAudio} disabled={loading} className="w-full bg-white text-black font-bold py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-gray-200 disabled:opacity-50">{loading ? <span className="animate-spin">⏳</span> : <PlayCircle size={18}/>} {loading ? 'Processing...' : 'Generate Insights'}</button>
+                                    </div>
+                                ) : (
+                                    <div className="text-center space-y-4">
+                                    <div className="w-16 h-16 bg-green-900/20 border border-green-500/50 rounded-full flex items-center justify-center mx-auto"><CheckCircle2 size={32} className="text-green-500"/></div>
+                                    <h3 className="text-xl font-bold">Processing Complete</h3>
+                                    <button onClick={() => setActiveTab('summary')} className="text-green-400 hover:underline">View Results</button>
+                                    </div>
+                                )}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
              </div>
@@ -478,8 +534,6 @@ export default function Dashboard() {
         .ai-output h1, .ai-output h2, .ai-output h3 { margin-top: 16px; margin-bottom: 8px; font-weight: 600; color: #4ade80; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.05em; }
         .ai-output ul, .ai-output ol { padding-left: 20px; margin-bottom: 12px; }
         .ai-output li { margin-bottom: 4px; }
-        
-        /* 🔴 FIXED: Black Scrollbar Track (Matches your Dark Mode) */
         .custom-scrollbar::-webkit-scrollbar { width: 8px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #000; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
@@ -500,13 +554,4 @@ export default function Dashboard() {
       </AnimatePresence>
     </div>
   );
-}
-
-function StepBadge({ num, label, active, done }) {
-  return (
-    <div className="flex flex-col items-center z-10">
-       <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border-2 mb-2 transition-colors ${active ? 'bg-green-500 border-green-500 text-black' : done ? 'bg-green-900 border-green-600 text-green-400' : 'bg-black border-zinc-700 text-zinc-500'}`}>{done ? <CheckCircle2 size={16}/> : num}</div>
-       <span className={`text-xs font-semibold ${active ? 'text-white' : 'text-gray-600'}`}>{label}</span>
-    </div>
-  )
 }
