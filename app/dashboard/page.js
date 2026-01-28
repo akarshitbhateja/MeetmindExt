@@ -72,6 +72,15 @@ export default function Dashboard() {
   };
 
   // --- UTILS ---
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
   const stripHtml = (html) => {
      if (!html) return '';
      const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -185,16 +194,31 @@ export default function Dashboard() {
     setPollQuestion(''); setPollOptions(['', '']);
   };
 
+  // ✅ FIXED: Saves Real PPT Content to MongoDB (Base64)
   const handleNextStep2 = async () => {
-    if (currentMeetingId) {
+    if (!currentMeetingId) return;
+    
+    setLoading(true);
+    let finalPptUrl = "";
+    let finalPptName = "";
+
+    try {
+      if (pptFile) {
+        if (pptFile.size > 10 * 1024 * 1024) { throw new Error("File too large (Max 10MB)"); }
+        finalPptUrl = await fileToBase64(pptFile);
+        finalPptName = pptFile.name;
+      }
+
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
-        pptUrl: pptFile ? "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf" : "",
-        pptName: pptFile ? pptFile.name : "" 
+        pptUrl: finalPptUrl,
+        pptName: finalPptName 
       });
-    }
-    setStep(3);
+      
+      setStep(3);
+    } catch (e) { alert(e.message); }
+    setLoading(false);
   };
 
   const handleProcessAudio = async () => {
@@ -256,38 +280,39 @@ export default function Dashboard() {
       {/* MAIN CONTENT AREA */}
       <main className="flex-1 relative overflow-hidden">
         
-        {/* VIEW: LIST (Centered Layout Restored) */}
+        {/* VIEW: LIST */}
         {view === 'list' && (
-          // 🟢 RESTORED: max-w-7xl mx-auto
-          <div className="absolute inset-0 overflow-y-auto p-8 max-w-7xl mx-auto w-full custom-scrollbar">
-            <div className="flex justify-between items-end mb-8">
-              <div><h1 className="text-4xl font-bold mb-2">Meetings</h1><p className="text-gray-400">Manage your schedule and AI insights.</p></div>
-              <button onClick={() => { setView('create'); setStep(1); setFormData({title:'', startTime:'', endTime:'', description:'', attendees:'', polls:[]}); setCurrentMeetingId(null); setTranscription(''); setSummary(''); }} className="bg-green-600 hover:bg-green-500 text-black font-semibold px-6 py-3 rounded-lg flex items-center gap-2 transition-transform hover:scale-105"><Plus size={20}/> New Meeting</button>
-            </div>
-            <div className="grid gap-4">
-              {meetings.map((m) => {
-                const status = getMeetingStatus(m.startTime, m.endTime);
-                return (
-                  <div key={m._id} onClick={() => { setFormData(m); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(cleanSummaryForDisplay(m.summary) || ''); setView('detail'); setActiveTab(m.summary ? 'summary' : 'upload'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
-                    <div className="flex gap-4 items-center">
-                      <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center font-bold text-gray-400 group-hover:text-green-400 group-hover:bg-zinc-800/80 transition-all border border-white/5">{m.title.charAt(0).toUpperCase()}</div>
-                      <div><h3 className="font-bold text-lg group-hover:text-green-400 transition-colors">{m.title}</h3><p className="text-sm text-gray-500 flex items-center gap-2"><Calendar size={14} />{m.startTime ? new Date(m.startTime).toLocaleString() : m.date}</p></div>
+          <div className="absolute inset-0 overflow-y-auto p-8 custom-scrollbar">
+            <div className="max-w-7xl mx-auto w-full">
+                <div className="flex justify-between items-end mb-8">
+                <div><h1 className="text-4xl font-bold mb-2">Meetings</h1><p className="text-gray-400">Manage your schedule and AI insights.</p></div>
+                <button onClick={() => { setView('create'); setStep(1); setFormData({title:'', startTime:'', endTime:'', description:'', attendees:'', polls:[]}); setCurrentMeetingId(null); setTranscription(''); setSummary(''); }} className="bg-green-600 hover:bg-green-500 text-black font-semibold px-6 py-3 rounded-lg flex items-center gap-2 transition-transform hover:scale-105"><Plus size={20}/> New Meeting</button>
+                </div>
+                <div className="grid gap-4">
+                {meetings.map((m) => {
+                    const status = getMeetingStatus(m.startTime, m.endTime);
+                    return (
+                    <div key={m._id} onClick={() => { setFormData(m); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(cleanSummaryForDisplay(m.summary) || ''); setView('detail'); setActiveTab(m.summary ? 'summary' : 'upload'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
+                        <div className="flex gap-4 items-center">
+                        <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center font-bold text-gray-400 group-hover:text-green-400 group-hover:bg-zinc-800/80 transition-all border border-white/5">{m.title.charAt(0).toUpperCase()}</div>
+                        <div><h3 className="font-bold text-lg group-hover:text-green-400 transition-colors">{m.title}</h3><p className="text-sm text-gray-500 flex items-center gap-2"><Calendar size={14} />{m.startTime ? new Date(m.startTime).toLocaleString() : m.date}</p></div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                        {status === 'completed' && <span className="px-3 py-1 bg-green-900/20 text-green-500 text-xs font-semibold rounded border border-green-900/30 flex items-center gap-1"><CheckCircle2 size={12}/> Completed</span>}
+                        {status === 'ongoing' && <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse"><Radio size={12}/> Ongoing</span>}
+                        {status === 'upcoming' && <span className="px-3 py-1 bg-zinc-800 text-gray-300 text-xs rounded border border-zinc-700 flex items-center gap-2"><Clock size={12}/> Upcoming</span>}
+                        <span className="text-xs text-gray-500 flex items-center gap-1 mr-2"><Users size={12}/> {m.attendees ? m.attendees.split(',').length : 0}</span>
+                        {m.meetingLink && <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.meetingLink); alert("Link copied!"); }} className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all"><LinkIcon size={16}/></button>}
+                        </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      {status === 'completed' && <span className="px-3 py-1 bg-green-900/20 text-green-500 text-xs font-semibold rounded border border-green-900/30 flex items-center gap-1"><CheckCircle2 size={12}/> Completed</span>}
-                      {status === 'ongoing' && <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse"><Radio size={12}/> Ongoing</span>}
-                      {status === 'upcoming' && <span className="px-3 py-1 bg-zinc-800 text-gray-300 text-xs rounded border border-zinc-700 flex items-center gap-2"><Clock size={12}/> Upcoming</span>}
-                      <span className="text-xs text-gray-500 flex items-center gap-1 mr-2"><Users size={12}/> {m.attendees ? m.attendees.split(',').length : 0}</span>
-                      {m.meetingLink && <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.meetingLink); alert("Link copied!"); }} className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all"><LinkIcon size={16}/></button>}
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                })}
+                </div>
             </div>
           </div>
         )}
 
-        {/* VIEW: CREATE WIZARD (Centered Layout Restored) */}
+        {/* VIEW: CREATE WIZARD (Centered) */}
         {view === 'create' && (
            <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center custom-scrollbar">
              <div className="w-full max-w-3xl">
@@ -300,7 +325,7 @@ export default function Dashboard() {
                 </div>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-2xl">
                   {step === 1 && (
-                    <div className="space-y-6">
+                    <div className="space-y-6 animate-in fade-in">
                       <input className="w-full bg-black border border-zinc-700 rounded-lg p-3" placeholder="Title *" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})}/>
                       <div className="grid grid-cols-2 gap-4">
                         <input type="datetime-local" className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})}/>
@@ -329,110 +354,99 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (Centered Layout Restored) */}
+        {/* VIEW: DETAIL (Centered) */}
         {view === 'detail' && (
-          // 🟢 RESTORED: max-w-7xl mx-auto
-          <div className="absolute inset-0 flex flex-col p-8 max-w-7xl mx-auto w-full">
-             
-             {/* Header */}
-             <div className="flex justify-between items-start border-b border-white/10 pb-6 shrink-0">
-                <div>
-                   <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
-                   <h2 className="text-3xl font-bold leading-tight">{formData.title}</h2>
-                   <div className="flex items-center gap-4 text-sm text-gray-400 mt-2">
-                       <span className="flex items-center gap-2"><Calendar size={14}/> {formData.startTime?.replace('T', ' ')}</span>
-                       <span className="flex items-center gap-2"><Users size={14}/> {formData.attendees?.split(',').length} Participants</span>
-                   </div>
-                </div>
-                <div className="flex gap-3">
-                   {formData.meetingLink && <button onClick={() => copyText(formData.meetingLink)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>}
-                   <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
-                </div>
-             </div>
-
-             {/* Content Grid */}
-             <div className="grid grid-cols-12 gap-8 mt-6 flex-1 min-h-0">
-                
-                {/* Left Side */}
-                <div className="col-span-4 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
-                   <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                      <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
-                      <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
-                   </div>
-                   {formData.polls && formData.polls.length > 0 && (
-                     <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                        <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
-                        <div className="space-y-3">{formData.polls.map((p, i) => (<div key={i} className="bg-black/30 p-3 rounded-lg border border-white/5"><p className="text-sm font-medium mb-1">{p.question}</p><div className="flex gap-2 text-xs text-gray-500">{p.options.map((opt, j) => (<span key={j} className="bg-zinc-800 px-2 py-1 rounded">{opt}</span>))}</div></div>))}</div>
-                     </div>
-                   )}
+          <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
+             <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
+                <div className="flex justify-between items-start border-b border-white/10 pb-6 shrink-0">
+                    <div>
+                    <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
+                    <h2 className="text-3xl font-bold leading-tight">{formData.title}</h2>
+                    <div className="flex items-center gap-4 text-sm text-gray-400 mt-2">
+                        <span className="flex items-center gap-2"><Calendar size={14}/> {formData.startTime?.replace('T', ' ')}</span>
+                        <span className="flex items-center gap-2"><Users size={14}/> {formData.attendees?.split(',').length} Participants</span>
+                    </div>
+                    </div>
+                    <div className="flex gap-3">
+                    {formData.meetingLink && <button onClick={() => copyText(formData.meetingLink)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>}
+                    <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
+                    </div>
                 </div>
 
-                {/* Right Side AI Hub */}
-                <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
-                   
-                   {/* Tabs Header */}
-                   <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
-                      {['summary', 'transcript', 'upload'].map((tab) => (
-                        <button key={tab} onClick={() => setActiveTab(tab)} className={`pb-4 px-4 text-sm font-medium transition-all relative capitalize ${activeTab === tab ? 'text-green-400' : 'text-gray-400 hover:text-white'}`}>
-                          {tab === 'upload' ? 'Recording / Upload' : tab}
-                          {activeTab === tab && <motion.div layoutId="underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-green-400"/>}
-                        </button>
-                      ))}
-                   </div>
-
-                   {/* Tab Content */}
-                   <div className="p-8 flex-1 overflow-y-scroll custom-scrollbar" style={{ scrollbarGutter: "stable both-edges" }}>
-                      {activeTab === 'summary' && (
-                        <div className="h-full flex flex-col animate-in fade-in">
-                           {summary ? (
-                             <>
-                               <div className="flex justify-end gap-2 mb-4 shrink-0 min-h-[32px]">
-                                 <button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy Text</button>
-                                 <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export .txt</button>
-                               </div>
-                               <div className="ai-output text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
-                             </>
-                           ) : (
-                             <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p></div>
-                           )}
+                <div className="grid grid-cols-12 gap-8 mt-6 flex-1 min-h-0">
+                    <div className="col-span-4 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
+                    <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
+                        <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
+                        <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
+                    </div>
+                    {formData.polls && formData.polls.length > 0 && (
+                        <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
+                            <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
+                            <div className="space-y-3">{formData.polls.map((p, i) => (<div key={i} className="bg-black/30 p-3 rounded-lg border border-white/5"><p className="text-sm font-medium mb-1">{p.question}</p><div className="flex gap-2 text-xs text-gray-500">{p.options.map((opt, j) => (<span key={j} className="bg-zinc-800 px-2 py-1 rounded">{opt}</span>))}</div></div>))}</div>
                         </div>
-                      )}
+                    )}
+                    </div>
 
-                      {activeTab === 'transcript' && (
-                        <div className="h-full flex flex-col gap-4 animate-in fade-in">
-                           {transcription ? (
-                             <>
-                               <div className="flex items-center gap-2 bg-black/20 border border-white/5 rounded px-3 py-2 shrink-0 min-h-[40px]">
-                                 <Search size={14} className="text-gray-500"/>
-                                 <input placeholder="Search keywords..." className="bg-transparent outline-none text-sm w-full" value={transcriptSearch} onChange={e => setTranscriptSearch(e.target.value)}/>
-                               </div>
-                               <div className="font-mono text-xs leading-relaxed text-gray-400 whitespace-pre-wrap">{filteredTranscript}</div>
-                             </>
-                           ) : (
-                             <div className="text-center py-20 text-gray-500"><Mic size={40} className="mx-auto mb-4 opacity-20"/><p>No transcript available.</p></div>
-                           )}
-                        </div>
-                      )}
-
-                      {activeTab === 'upload' && (
-                        <div className="flex flex-col items-center justify-center h-full space-y-6 animate-in fade-in">
-                           {!summary ? (
-                             <div className="w-full max-w-md border-2 border-dashed border-zinc-700 bg-black/20 rounded-xl p-8 flex flex-col items-center text-center">
+                    <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
+                    <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
+                        {['summary', 'transcript', 'upload'].map((tab) => (
+                            <button key={tab} onClick={() => setActiveTab(tab)} className={`pb-4 px-4 text-sm font-medium transition-all relative capitalize ${activeTab === tab ? 'text-green-400' : 'text-gray-400 hover:text-white'}`}>
+                            {tab === 'upload' ? 'Recording / Upload' : tab}
+                            {activeTab === tab && <motion.div layoutId="underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-green-400"/>}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="p-8 flex-1 overflow-y-scroll custom-scrollbar" style={{ scrollbarGutter: "stable both-edges" }}>
+                        {activeTab === 'summary' && (
+                            <div className="h-full flex flex-col animate-in fade-in">
+                            {summary ? (
+                                <>
+                                <div className="flex justify-end gap-2 mb-4 shrink-0 min-h-[32px]">
+                                    <button onClick={() => copyText(summary)} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Copy size={12}/> Copy Text</button>
+                                    <button onClick={exportSummary} className="text-xs flex items-center gap-1 bg-white/5 hover:bg-white/10 px-3 py-1 rounded transition"><Download size={12}/> Export</button>
+                                </div>
+                                <div className="ai-output text-gray-300 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: summary }} />
+                                </>
+                            ) : (
+                                <div className="text-center py-20 text-gray-500"><FileText size={40} className="mx-auto mb-4 opacity-20"/><p>No summary generated.</p></div>
+                            )}
+                            </div>
+                        )}
+                        {activeTab === 'transcript' && (
+                            <div className="h-full flex flex-col gap-4 animate-in fade-in">
+                            {transcription ? (
+                                <>
+                                <div className="flex items-center gap-2 bg-black/20 border border-white/5 rounded px-3 py-2 shrink-0 min-h-[40px]">
+                                    <Search size={14} className="text-gray-500"/>
+                                    <input placeholder="Search keywords..." className="bg-transparent outline-none text-sm w-full" value={transcriptSearch} onChange={e => setTranscriptSearch(e.target.value)}/>
+                                </div>
+                                <div className="font-mono text-xs leading-relaxed text-gray-400 whitespace-pre-wrap">{filteredTranscript}</div>
+                                </>
+                            ) : (
+                                <div className="text-center py-20 text-gray-500"><Mic size={40} className="mx-auto mb-4 opacity-20"/><p>No transcript available.</p></div>
+                            )}
+                            </div>
+                        )}
+                        {activeTab === 'upload' && (
+                            <div className="flex flex-col items-center justify-center h-full space-y-6 animate-in fade-in">
+                            {!summary ? (
+                                <div className="w-full max-w-md border-2 border-dashed border-zinc-700 bg-black/20 rounded-xl p-8 flex flex-col items-center text-center">
                                 <div className="w-16 h-16 bg-zinc-800 rounded-full flex items-center justify-center mb-4"><Upload size={24} className="text-green-500"/></div>
                                 <h4 className="font-semibold mb-2">Upload Meeting Recording</h4>
                                 <input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-600 file:text-black hover:file:bg-green-500 mb-4"/>
                                 <button onClick={handleProcessAudio} disabled={loading} className="w-full bg-white text-black font-bold py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-gray-200 disabled:opacity-50">{loading ? <span className="animate-spin">⏳</span> : <PlayCircle size={18}/>} {loading ? 'Processing...' : 'Generate Insights'}</button>
-                             </div>
-                           ) : (
-                             <div className="text-center space-y-4">
+                                </div>
+                            ) : (
+                                <div className="text-center space-y-4">
                                 <div className="w-16 h-16 bg-green-900/20 border border-green-500/50 rounded-full flex items-center justify-center mx-auto"><CheckCircle2 size={32} className="text-green-500"/></div>
                                 <h3 className="text-xl font-bold">Processing Complete</h3>
                                 <button onClick={() => setActiveTab('summary')} className="text-green-400 hover:underline">View Results</button>
-                             </div>
-                           )}
-                        </div>
-                      )}
-                   </div>
+                                </div>
+                            )}
+                            </div>
+                        )}
+                    </div>
+                    </div>
                 </div>
              </div>
           </div>
@@ -440,7 +454,7 @@ export default function Dashboard() {
 
       </main>
 
-      {/* GLOBAL STYLE RESET FOR AI CONTENT + BLACK SCROLLBAR TRACK */}
+      {/* STYLES: Black Scrollbar & AI Clean up */}
       <style jsx global>{`
         .ai-output * { margin: 0; padding: 0; }
         .ai-output p { margin-bottom: 12px; }
@@ -448,11 +462,11 @@ export default function Dashboard() {
         .ai-output ul, .ai-output ol { padding-left: 20px; margin-bottom: 12px; }
         .ai-output li { margin-bottom: 4px; }
         
-        /* 🔴 FORCE SCROLLBAR TRACK TO BE BLACK (Fixes "White Space on Right" issue) */
+        /* 🔴 FIXED SCROLLBAR: Black Track (Invisible on black bg) */
         .custom-scrollbar::-webkit-scrollbar { width: 8px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #000; } 
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #444; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #000000; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
       `}</style>
 
       {/* Share Modal */}
