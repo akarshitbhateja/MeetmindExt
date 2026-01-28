@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { auth, provider, signInWithPopup, GoogleAuthProvider } from '@/lib/firebase';
+// ✅ Import Storage functions
+import { auth, provider, signInWithPopup, GoogleAuthProvider, storage } from '@/lib/firebase';
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage"; 
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
@@ -9,7 +11,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
-  PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2
+  PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -19,7 +21,7 @@ export default function Dashboard() {
   const [meetings, setMeetings] = useState([]);
   const [view, setView] = useState('list'); 
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false); // New state for file upload spinner
+  const [uploading, setUploading] = useState(false); // Spinner state
 
   // Wizard & Meeting Data
   const [step, setStep] = useState(1);
@@ -28,9 +30,9 @@ export default function Dashboard() {
   });
   const [currentMeetingId, setCurrentMeetingId] = useState(null);
 
-  // Polls State
+  // Polls
   const [pollQuestion, setPollQuestion] = useState('');
-  const [pollOptions, setPollOptions] = useState(['', '']); // Start with 2 empty options
+  const [pollOptions, setPollOptions] = useState(['', '']);
 
   // AI & Assets
   const [activeTab, setActiveTab] = useState('summary'); 
@@ -73,14 +75,7 @@ export default function Dashboard() {
   };
 
   // --- UTILS ---
-  const fileToBase64 = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = (error) => reject(error);
-    });
-  };
+  // (Removed fileToBase64 - No longer needed)
 
   const stripHtml = (html) => {
      if (!html) return '';
@@ -167,36 +162,18 @@ export default function Dashboard() {
     } catch (error) { alert("Schedule failed: " + error.message); return null; }
   };
 
-  // --- WIZARD ACTIONS ---
-
-  // STEP 1: Details & Validation
+  // --- ACTIONS ---
   const handleNextStep1 = async () => {
-    // 1. Basic Field Validation
-    if (!formData.title || !formData.startTime || !formData.endTime) { 
-        alert("Please fill in Title, Start Time, and End Time."); 
-        return; 
-    }
-
-    // 2. ✅ LOGIC FIX: Date Validation (Start vs End)
-    const startDate = new Date(formData.startTime);
-    const endDate = new Date(formData.endTime);
-
-    if (startDate >= endDate) {
-        alert("Invalid Time: End time must be AFTER the start time.");
-        return;
-    }
-
+    if (!formData.title || !formData.startTime) { alert("Required fields missing."); return; }
     setLoading(true);
-    
-    // 3. Create Calendar Event
     const calendarLink = await createGoogleCalendarEvent(formData);
     if (!calendarLink) { setLoading(false); return; }
 
-    // 4. Save to DB
     const meetingData = { ...formData, userId: user.uid, meetingLink: calendarLink };
     try {
+      let res;
       if (!currentMeetingId) {
-        const res = await axios.post('/api/meetings', meetingData);
+        res = await axios.post('/api/meetings', meetingData);
         setCurrentMeetingId(res.data.data._id);
       } else {
         await axios.put('/api/meetings', { id: currentMeetingId, ...meetingData });
@@ -206,81 +183,51 @@ export default function Dashboard() {
     setLoading(false);
   };
 
-  // POLLS LOGIC
-  // ✅ FIX: Correctly updates specific index in array
-  const handlePollOptionChange = (index, value) => {
-    const newOptions = [...pollOptions];
-    newOptions[index] = value;
-    setPollOptions(newOptions);
-  };
-
-  // ✅ FIX: Adds new empty option
-  const addPollOptionField = () => {
-    setPollOptions([...pollOptions, '']);
-  };
-
-  // ✅ FIX: Save Poll to Local State
-  const savePollToLocal = () => {
-    if (!pollQuestion.trim()) return alert("Enter a question");
-    // Filter out empty options
-    const validOptions = pollOptions.filter(opt => opt.trim() !== "");
-    if (validOptions.length < 2) return alert("Add at least 2 options");
-
-    const newPoll = { question: pollQuestion, options: validOptions };
+  const handleAddPoll = () => {
+    if(!pollQuestion) return;
+    const newPoll = { question: pollQuestion, options: pollOptions.filter(o => o !== '') };
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
-    
-    // Reset inputs
-    setPollQuestion('');
-    setPollOptions(['', '']);
+    setPollQuestion(''); setPollOptions(['', '']);
   };
 
-  // STEP 2: Assets Upload
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
-    
-    // ✅ FIX: Progress Spinner State
-    setUploading(true); 
-    
-    let finalPptUrl = "";
-    let finalPptName = "";
+    setUploading(true); // Spinner ON
+
+    let uploadedUrl = "";
+    let uploadedName = "";
 
     try {
       if (pptFile) {
-        // ✅ FIX: Strict 3MB Limit to prevent 413 Error
-        const MAX_SIZE = 3 * 1024 * 1024; // 3MB
-        if (pptFile.size > MAX_SIZE) {
-            setUploading(false);
-            throw new Error(`File is too large (${(pptFile.size / 1024 / 1024).toFixed(1)}MB). Max 3MB allowed for database storage.`);
-        }
-
-        console.log("Converting file...");
-        finalPptUrl = await fileToBase64(pptFile);
-        finalPptName = pptFile.name;
+        // ✅ 1. Upload to Firebase Storage
+        const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
+        const snapshot = await uploadBytes(fileRef, pptFile);
+        
+        // ✅ 2. Get Public URL
+        uploadedUrl = await getDownloadURL(snapshot.ref);
+        uploadedName = pptFile.name;
+        
+        console.log("Uploaded URL:", uploadedUrl);
       }
 
+      // ✅ 3. Save URL to MongoDB
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
-        pptUrl: finalPptUrl,
-        pptName: finalPptName 
+        pptUrl: uploadedUrl,
+        pptName: uploadedName 
       });
       
       setStep(3);
     } catch (e) { 
-        alert(e.message); 
+        console.error(e);
+        alert("Upload failed: " + e.message); 
     }
-    setUploading(false);
+    setUploading(false); // Spinner OFF
   };
 
-  // STEP 3: Audio Processing
   const handleProcessAudio = async () => {
     if (!audioFile) return alert("Upload audio first.");
-    
-    // 3MB check for audio too (Vercel limit)
-    if (audioFile.size > 4 * 1024 * 1024) {
-        return alert("Audio file too large. Vercel Free Tier limit is 4.5MB. Please trim the file.");
-    }
-
     setLoading(true);
     try {
       const data = new FormData();
@@ -335,7 +282,7 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      {/* MAIN CONTENT */}
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 relative overflow-hidden">
         
         {/* VIEW: LIST */}
@@ -394,70 +341,26 @@ export default function Dashboard() {
                       <div className="flex justify-end pt-4 gap-3"><button onClick={() => setView('list')} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button><button onClick={handleNextStep1} disabled={loading} className="bg-green-600 hover:bg-green-500 text-black font-bold px-8 py-3 rounded-lg flex items-center gap-2">{loading ? 'Scheduling...' : 'Next >'}</button></div>
                     </div>
                   )}
-                  
-                  {/* STEP 2 - ASSETS & POLLS */}
                   {step === 2 && (
                     <div className="space-y-8">
-                      {/* File Upload Section */}
-                      <div>
-                        <label className="block text-sm text-gray-400 mb-2">Upload Presentation (Max 3MB)</label>
-                        <div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center">
-                            {uploading ? (
-                                <div className="flex flex-col items-center">
-                                    <div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                                    <span className="text-sm text-green-400">Uploading to Database...</span>
-                                </div>
-                            ) : (
-                                <>
-                                    <input type="file" className="hidden" id="ppt-upload" onChange={e => setPptFile(e.target.files[0])} />
-                                    <label htmlFor="ppt-upload" className="cursor-pointer flex flex-col items-center">
-                                        <Upload className="text-green-500 mb-2" size={24}/>
-                                        <span className="text-sm font-medium">{pptFile ? pptFile.name : "Select PDF/PPT"}</span>
-                                    </label>
-                                </>
-                            )}
-                        </div>
+                      {/* Upload Box with Spinner */}
+                      <div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center">
+                        {uploading ? (
+                            <div className="flex flex-col items-center justify-center">
+                                <div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                                <span className="text-sm text-green-400">Uploading to Firebase...</span>
+                            </div>
+                        ) : (
+                            <>
+                                <input type="file" className="hidden" id="ppt-upload" onChange={e => setPptFile(e.target.files[0])} />
+                                <label htmlFor="ppt-upload" className="cursor-pointer flex flex-col items-center"><Upload className="text-green-500 mb-2" size={24}/><span className="text-sm font-medium">{pptFile ? pptFile.name : "Select PDF/PPT"}</span></label>
+                            </>
+                        )}
                       </div>
-
-                      {/* Polls Section - FIXED */}
-                      <div className="bg-black/40 border border-zinc-700 rounded-lg p-4">
-                          <h4 className="text-sm font-semibold mb-3">Create a Poll</h4>
-                          <input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Poll Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/>
-                          
-                          {pollOptions.map((opt, i) => (
-                            <input 
-                                key={i} 
-                                className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" 
-                                placeholder={`Option ${i+1}`} 
-                                value={opt} 
-                                onChange={e => handlePollOptionChange(i, e.target.value)}
-                            />
-                          ))}
-                          
-                          <button onClick={addPollOptionField} className="text-xs text-green-500 mb-4 hover:underline">+ Add Option</button>
-                          
-                          <button onClick={savePollToLocal} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm flex items-center justify-center gap-2">
-                              <Plus size={14}/> Add Poll to Meeting
-                          </button>
-                      </div>
-
-                      {/* List of Added Polls */}
-                      <div className="space-y-2">
-                          {formData.polls.map((p, i) => (
-                              <div key={i} className="bg-zinc-900 px-4 py-2 rounded flex justify-between items-center border border-zinc-800">
-                                  <span className="text-sm">{p.question}</span>
-                                  <span className="text-xs text-gray-500">{p.options.length} options</span>
-                              </div>
-                          ))}
-                      </div>
-
-                      <div className="flex justify-between pt-4">
-                          <button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button>
-                          <button onClick={handleNextStep2} disabled={uploading} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg disabled:opacity-50">Next &gt;</button>
-                      </div>
+                      <div className="bg-black/40 border border-zinc-700 rounded-lg p-4"><input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Poll Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/><button onClick={() => setPollOptions([...pollOptions, ''])} className="text-xs text-green-500 mb-3">+ Add Option</button><button onClick={handleAddPoll} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm"><Plus size={14} className="inline"/> Add Poll</button></div>
+                      <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button><button onClick={handleNextStep2} disabled={uploading} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg disabled:opacity-50">Next &gt;</button></div>
                     </div>
                   )}
-
                   {step === 3 && (
                     <div className="space-y-6">
                       <div className="border border-zinc-700 rounded-lg p-8 bg-black/40 flex flex-col items-center justify-center"><input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="mb-4 text-sm text-gray-400"/><button onClick={handleProcessAudio} disabled={loading} className="bg-white text-black font-bold px-6 py-3 rounded-lg flex items-center gap-2">{loading ? 'Processing...' : 'Generate Insights'}</button></div>
@@ -469,7 +372,7 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL */}
+        {/* VIEW: DETAIL (Centered) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
@@ -576,7 +479,7 @@ export default function Dashboard() {
         .ai-output ul, .ai-output ol { padding-left: 20px; margin-bottom: 12px; }
         .ai-output li { margin-bottom: 4px; }
         
-        /* 🔴 FIXED: Black Scrollbar Track to hide white space */
+        /* 🔴 FIXED: Black Scrollbar Track (Matches your Dark Mode) */
         .custom-scrollbar::-webkit-scrollbar { width: 8px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #000; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
