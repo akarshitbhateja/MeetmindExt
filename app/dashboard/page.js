@@ -1,14 +1,15 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { auth, provider, signInWithPopup, GoogleAuthProvider } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-// ✅ Import PDFJS for Thumbnails
+
+// ✅ FIX: Import main PDF lib and use CDN for worker (Solves Vercel Error)
 import * as pdfjsLib from 'pdfjs-dist/build/pdf';
-import 'pdfjs-dist/build/pdf.worker.entry'; 
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 import { 
   Plus, Calendar, Clock, Users, FileText, 
@@ -16,24 +17,23 @@ import {
   PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2
 } from 'lucide-react';
 
-// Set worker source for PDF.js (Required for Next.js)
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
-// ... (Imports for Firebase Storage remain same)
+// Firebase Storage Imports
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 export default function Dashboard() {
 
+  // --- STATE ---
   const [user, setUser] = useState(null);
   const [meetings, setMeetings] = useState([]);
   const [view, setView] = useState('list'); 
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
 
+  // Wizard & Meeting Data
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
-    title: '', startTime: '', endTime: '', description: '', attendees: '', pptUrl: '', pptThumbnail: '', polls: []
+    title: '', startTime: '', endTime: '', description: '', attendees: '', pptUrl: '', pptName: '', pptThumbnail: '', polls: []
   });
   const [currentMeetingId, setCurrentMeetingId] = useState(null);
 
@@ -41,15 +41,16 @@ export default function Dashboard() {
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
 
-  // Assets
+  // AI & Assets
   const [activeTab, setActiveTab] = useState('summary'); 
   const [audioFile, setAudioFile] = useState(null);
   const [pptFile, setPptFile] = useState(null);
-  const [pptPreview, setPptPreview] = useState(null); // ✅ Store Thumbnail Preview
-  
+  const [pptPreview, setPptPreview] = useState(null); // Local preview state
   const [transcription, setTranscription] = useState('');
   const [summary, setSummary] = useState('');
   const [transcriptSearch, setTranscriptSearch] = useState('');
+
+  // Modals
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareOptions, setShareOptions] = useState({ video: true, notes: true, ppt: true });
 
@@ -82,7 +83,8 @@ export default function Dashboard() {
   };
 
   // --- UTILS ---
-  // ✅ 1. Thumbnail Generator Function
+  
+  // ✅ Generate Thumbnail from PDF File
   const generateThumbnail = async (file) => {
     try {
       const fileUrl = URL.createObjectURL(file);
@@ -90,7 +92,7 @@ export default function Dashboard() {
       const pdf = await loadingTask.promise;
       const page = await pdf.getPage(1); // Get Page 1
       
-      const viewport = page.getViewport({ scale: 0.5 }); // Scale down for thumbnail
+      const viewport = page.getViewport({ scale: 0.5 }); // Scale down
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       canvas.height = viewport.height;
@@ -114,15 +116,21 @@ export default function Dashboard() {
     if (!text) return '';
     let clean = text.replace(/```html|```/gi, '');
     const bodyMatch = clean.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-    if (bodyMatch && bodyMatch[1]) clean = bodyMatch[1];
-    else clean = clean.replace(/<!DOCTYPE html>/gi, '').replace(/<html[^>]*>/gi, '').replace(/<\/html>/gi, '').replace(/<head>[\s\S]*?<\/head>/gi, '');
+    if (bodyMatch && bodyMatch[1]) {
+      clean = bodyMatch[1];
+    } else {
+      clean = clean.replace(/<!DOCTYPE html>/gi, '')
+                   .replace(/<html[^>]*>/gi, '')
+                   .replace(/<\/html>/gi, '')
+                   .replace(/<head>[\s\S]*?<\/head>/gi, '');
+    }
     return clean.trim();
   };
 
   const copyText = (content) => {
     const plainText = stripHtml(content);
     navigator.clipboard.writeText(plainText);
-    alert("Copied!");
+    alert("Copied plain text to clipboard!");
   };
 
   const exportSummary = () => {
@@ -131,7 +139,7 @@ export default function Dashboard() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${formData.title}_summary.txt`;
+    a.download = `${formData.title.replace(/\s+/g, '_')}_summary.txt`;
     a.click();
   };
 
@@ -145,7 +153,9 @@ export default function Dashboard() {
 
   const filteredTranscript = useMemo(() => {
     if (!transcriptSearch) return transcription;
-    return transcription.split('\n').filter(line => line.toLowerCase().includes(transcriptSearch.toLowerCase())).join('\n___\n');
+    return transcription.split('\n').filter(line => 
+      line.toLowerCase().includes(transcriptSearch.toLowerCase())
+    ).join('\n___\n');
   }, [transcriptSearch, transcription]);
 
   // --- GOOGLE CALENDAR ---
@@ -159,6 +169,7 @@ export default function Dashboard() {
         sessionStorage.setItem('google_access_token', token);
       } catch (e) { alert("Calendar access required."); return null; }
     }
+
     const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const event = {
       summary: meetingData.title,
@@ -169,6 +180,7 @@ export default function Dashboard() {
       reminders: { useDefault: false, overrides: [{ method: 'email', minutes: 30 }, { method: 'popup', minutes: 10 }] },
       conferenceData: { createRequest: { requestId: Math.random().toString(36).substring(7) } }
     };
+
     try {
       const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, {
         method: "POST", headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(event)
@@ -179,19 +191,18 @@ export default function Dashboard() {
     } catch (error) { alert("Schedule failed: " + error.message); return null; }
   };
 
-  // --- WIZARD ACTIONS ---
+  // --- ACTIONS ---
   const handleNextStep1 = async () => {
-    if (!formData.title || !formData.startTime || !formData.endTime) return alert("Fill all details.");
-    if (new Date(formData.startTime) >= new Date(formData.endTime)) return alert("End time must be after start time.");
-    
+    if (!formData.title || !formData.startTime || !formData.endTime) { alert("Required fields missing."); return; }
     setLoading(true);
     const calendarLink = await createGoogleCalendarEvent(formData);
     if (!calendarLink) { setLoading(false); return; }
 
     const meetingData = { ...formData, userId: user.uid, meetingLink: calendarLink };
     try {
+      let res;
       if (!currentMeetingId) {
-        const res = await axios.post('/api/meetings', meetingData);
+        res = await axios.post('/api/meetings', meetingData);
         setCurrentMeetingId(res.data.data._id);
       } else {
         await axios.put('/api/meetings', { id: currentMeetingId, ...meetingData });
@@ -201,7 +212,7 @@ export default function Dashboard() {
     setLoading(false);
   };
 
-  // ✅ FIXED POLLS LOGIC
+  // Polls Logic
   const handlePollOptionChange = (index, value) => {
     const newOptions = [...pollOptions];
     newOptions[index] = value;
@@ -228,10 +239,10 @@ export default function Dashboard() {
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // ✅ UPDATED: Upload + Thumbnail Generation
+  // ✅ UPLOAD STEP: Handles Firebase Upload + Thumbnail Generation
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
-    setUploading(true); 
+    setUploading(true);
     
     let uploadedUrl = "";
     let uploadedName = "";
@@ -239,10 +250,10 @@ export default function Dashboard() {
 
     try {
       if (pptFile) {
-        // 1. Generate Thumbnail (Client Side)
+        // 1. Generate Thumbnail
         console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
-        setPptPreview(thumbnailUrl); // Show locally
+        setPptPreview(thumbnailUrl);
 
         // 2. Upload PDF to Firebase Storage
         console.log("Uploading file...");
@@ -252,17 +263,20 @@ export default function Dashboard() {
         uploadedName = pptFile.name;
       }
 
-      // 3. Save Both URL & Thumbnail Base64 to MongoDB
+      // 3. Save ALL data to MongoDB
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
         pptUrl: uploadedUrl,
         pptName: uploadedName,
-        pptThumbnail: thumbnailUrl // ✅ Saving Thumbnail
+        pptThumbnail: thumbnailUrl 
       });
       
       setStep(3);
-    } catch (e) { alert("Upload failed: " + e.message); }
+    } catch (e) { 
+        console.error(e);
+        alert("Upload failed: " + e.message); 
+    }
     setUploading(false);
   };
 
@@ -280,7 +294,9 @@ export default function Dashboard() {
       sumData.append("text", transRes.data.text);
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      const displaySummary = cleanSummaryForDisplay(sumRes.data.summary);
+      const rawSummary = sumRes.data.summary; 
+      const displaySummary = cleanSummaryForDisplay(rawSummary);
+
       setTranscription(transRes.data.text);
       setSummary(displaySummary);
 
@@ -296,7 +312,7 @@ export default function Dashboard() {
     if (process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK) {
         try { await axios.post(process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK, {
               meetingId: currentMeetingId, title: formData.title, summary: stripHtml(summary), transcription, attendees: formData.attendees
-        }); alert("Shared!"); } catch(e) {}
+        }); alert("Assets shared!"); } catch(e) {}
     }
     setShowShareModal(false); setView('list'); setStep(1); fetchMeetings(user.uid);
   };
@@ -306,6 +322,7 @@ export default function Dashboard() {
   return (
     <div className="h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col overflow-hidden">
       
+      {/* NAVBAR */}
       <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 shrink-0 h-[72px] z-50 shadow-md">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
           <div className="w-8 h-8 bg-gradient-to-tr from-green-400 to-green-600 rounded-lg flex items-center justify-center font-bold text-black">M</div>
@@ -319,8 +336,10 @@ export default function Dashboard() {
         </div>
       </nav>
 
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 relative overflow-hidden">
         
+        {/* VIEW: LIST */}
         {view === 'list' && (
           <div className="absolute inset-0 overflow-y-auto p-8 custom-scrollbar">
             <div className="max-w-7xl mx-auto w-full">
@@ -352,16 +371,16 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* VIEW: WIZARD */}
+        {/* VIEW: CREATE WIZARD */}
         {view === 'create' && (
            <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center custom-scrollbar">
              <div className="w-full max-w-3xl">
                 <div className="mb-8 text-center"><h2 className="text-3xl font-bold mb-2">Create Your Meeting</h2></div>
                 <div className="flex justify-between items-center mb-10 px-10 relative">
                   <div className="absolute top-1/2 left-0 w-full h-0.5 bg-zinc-800 -z-10"></div>
-                  <div className={`flex flex-col items-center z-10`}><div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border-2 ${step>=1 ? 'bg-green-500 border-green-500 text-black' : 'bg-black border-zinc-700 text-zinc-500'}`}>1</div><span className="text-xs mt-1">Plan</span></div>
-                  <div className={`flex flex-col items-center z-10`}><div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border-2 ${step>=2 ? 'bg-green-500 border-green-500 text-black' : 'bg-black border-zinc-700 text-zinc-500'}`}>2</div><span className="text-xs mt-1">Assets</span></div>
-                  <div className={`flex flex-col items-center z-10`}><div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border-2 ${step>=3 ? 'bg-green-500 border-green-500 text-black' : 'bg-black border-zinc-700 text-zinc-500'}`}>3</div><span className="text-xs mt-1">AI</span></div>
+                  <StepBadge num={1} label="Plan" active={step === 1} done={step > 1} />
+                  <StepBadge num={2} label="Assets" active={step === 2} done={step > 2} />
+                  <StepBadge num={3} label="AI & Final" active={step === 3} done={step > 3} />
                 </div>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-2xl">
                   {step === 1 && (
@@ -378,7 +397,6 @@ export default function Dashboard() {
                   )}
                   {step === 2 && (
                     <div className="space-y-8 animate-in fade-in">
-                      {/* ✅ FIX: Show Thumbnail After Upload */}
                       <div className="border border-dashed border-zinc-700 rounded-lg p-6 bg-black/40 flex flex-col items-center min-h-[150px] justify-center">
                         {uploading ? (
                             <div className="flex flex-col items-center"><div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-2"></div><span className="text-sm text-green-400">Processing PDF...</span></div>
@@ -395,7 +413,6 @@ export default function Dashboard() {
                         )}
                       </div>
 
-                      {/* ✅ FIX: Polls Form */}
                       <div className="bg-black/40 border border-zinc-700 rounded-lg p-4">
                           <h4 className="text-sm font-semibold mb-3">Create Poll</h4>
                           <input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/>
@@ -432,7 +449,7 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (Centered) */}
+        {/* VIEW: DETAIL */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
@@ -554,4 +571,13 @@ export default function Dashboard() {
       </AnimatePresence>
     </div>
   );
+}
+
+function StepBadge({ num, label, active, done }) {
+  return (
+    <div className="flex flex-col items-center z-10">
+       <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border-2 mb-2 transition-colors ${active ? 'bg-green-500 border-green-500 text-black' : done ? 'bg-green-900 border-green-600 text-green-400' : 'bg-black border-zinc-700 text-zinc-500'}`}>{done ? <CheckCircle2 size={16}/> : num}</div>
+       <span className={`text-xs font-semibold ${active ? 'text-white' : 'text-gray-600'}`}>{label}</span>
+    </div>
+  )
 }
