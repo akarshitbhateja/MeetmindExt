@@ -7,14 +7,16 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 
+// ✅ VERCEL FIX: No top-level PDF imports. We load it dynamically inside the function.
+
 import { 
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
   PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2,
-  Video, FileType
+  Video, FileType // ✅ Premium Icons
 } from 'lucide-react';
 
-// Firebase Storage Imports
+// Firebase Storage
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
@@ -81,10 +83,10 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ FIXED: Dynamic Import for PDF.js (Prevents Server Crash on Vercel)
+  // ✅ THUMBNAIL GENERATOR (Fixed for Vercel)
   const generateThumbnail = async (file) => {
     try {
-      // 1. Load Library ONLY on Client (inside the function)
+      // 1. Dynamic Import (Loads only in browser)
       const pdfjsLib = await import('pdfjs-dist/build/pdf');
       pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
@@ -94,7 +96,7 @@ export default function Dashboard() {
       const pdf = await loadingTask.promise;
       const page = await pdf.getPage(1); // Get Page 1
       
-      const viewport = page.getViewport({ scale: 0.5 }); // Scale down
+      const viewport = page.getViewport({ scale: 0.5 }); 
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       canvas.height = viewport.height;
@@ -189,7 +191,7 @@ export default function Dashboard() {
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
       
-      // Return Hangout link or HTML link
+      // Return Hangout link (Meet) OR htmlLink (Calendar)
       return data.hangoutLink || data.htmlLink;
 
     } catch (error) { alert("Schedule failed: " + error.message); return null; }
@@ -243,7 +245,7 @@ export default function Dashboard() {
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // ✅ UPLOAD STEP: Handles Firebase Upload + Thumbnail Generation
+  // ✅ UPLOAD STEP: Firebase Upload + Thumbnail Generation
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
     setUploading(true);
@@ -275,6 +277,9 @@ export default function Dashboard() {
         pptName: uploadedName,
         pptThumbnail: thumbnailUrl 
       });
+      
+      // Update local state so UI reflects immediately
+      setFormData(prev => ({ ...prev, pptUrl: uploadedUrl, pptName: uploadedName, pptThumbnail: thumbnailUrl }));
       
       setStep(3);
     } catch (e) { 
@@ -470,7 +475,7 @@ export default function Dashboard() {
                             <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
                         </div>
 
-                        {/* ✅ NEW PREMIUM ASSET CARD */}
+                        {/* ✅ PREMIUM ASSET CARD */}
                         <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
                             {/* 1. Thumbnail Image */}
                             <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
@@ -490,30 +495,25 @@ export default function Dashboard() {
                                 {formData.meetingLink && (
                                     <div>
                                         <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Video Link</label>
-                                        <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg border border-zinc-800">
+                                        <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg border border-zinc-800 group hover:border-green-900/50 transition">
                                             <Video size={16} className="text-green-500"/>
                                             <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">
                                                 {formData.meetingLink.replace('https://', '')}
                                             </a>
-                                            <button onClick={() => copyText(formData.meetingLink)} className="text-zinc-400 hover:text-white"><Copy size={14}/></button>
+                                            <button onClick={() => copyText(formData.meetingLink)} className="text-zinc-500 hover:text-white transition"><Copy size={14}/></button>
                                         </div>
                                     </div>
                                 )}
 
                                 {/* Filename Row */}
                                 {formData.pptName && (
-                                    <div>
-                                        <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Filename</label>
-                                        <div className="text-sm text-gray-300 font-medium truncate">{formData.pptName}</div>
-                                    </div>
-                                )}
-
-                                {/* File Type Badge */}
-                                {formData.pptUrl && (
-                                    <div>
-                                        <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Type</label>
-                                        <div className="inline-flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-xs text-white">
-                                            <FileType size={12}/> PDF
+                                    <div className="flex items-center justify-between border-t border-zinc-800 pt-3 mt-3">
+                                        <div>
+                                            <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider block mb-0.5">Filename</label>
+                                            <div className="text-sm text-gray-300 font-medium truncate max-w-[180px]">{formData.pptName}</div>
+                                        </div>
+                                        <div className="inline-flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-xs text-zinc-400 font-mono">
+                                            <FileType size={10}/> PDF
                                         </div>
                                     </div>
                                 )}
