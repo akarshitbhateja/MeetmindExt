@@ -7,9 +7,7 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// ✅ FIX: Import main PDF lib and use CDN for worker (Solves Vercel Error)
-import * as pdfjsLib from 'pdfjs-dist/build/pdf';
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// ✅ NOTE: PDFJS is now imported dynamically inside generateThumbnail to fix Vercel Build Error
 
 import { 
   Plus, Calendar, Clock, Users, FileText, 
@@ -45,7 +43,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('summary'); 
   const [audioFile, setAudioFile] = useState(null);
   const [pptFile, setPptFile] = useState(null);
-  const [pptPreview, setPptPreview] = useState(null); // Local preview state
+  const [pptPreview, setPptPreview] = useState(null); 
   const [transcription, setTranscription] = useState('');
   const [summary, setSummary] = useState('');
   const [transcriptSearch, setTranscriptSearch] = useState('');
@@ -84,9 +82,14 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ Generate Thumbnail from PDF File
+  // ✅ FIXED: Dynamic Import for PDF.js (Prevents Server Crash)
   const generateThumbnail = async (file) => {
     try {
+      // 1. Load Library ONLY on Client
+      const pdfjsLib = await import('pdfjs-dist/build/pdf');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+      // 2. Process File
       const fileUrl = URL.createObjectURL(file);
       const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
@@ -193,7 +196,7 @@ export default function Dashboard() {
 
   // --- ACTIONS ---
   const handleNextStep1 = async () => {
-    if (!formData.title || !formData.startTime || !formData.endTime) { alert("Required fields missing."); return; }
+    if (!formData.title || !formData.startTime) { alert("Required fields missing."); return; }
     setLoading(true);
     const calendarLink = await createGoogleCalendarEvent(formData);
     if (!calendarLink) { setLoading(false); return; }
@@ -449,7 +452,7 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL */}
+        {/* VIEW: DETAIL (Centered) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
