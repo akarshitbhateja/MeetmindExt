@@ -7,10 +7,6 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// PDF Lib Imports
-import * as pdfjsLib from 'pdfjs-dist/build/pdf';
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
 import { 
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
@@ -18,7 +14,7 @@ import {
   Video, FileType
 } from 'lucide-react';
 
-// Firebase Storage
+// Firebase Storage Imports
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
@@ -84,20 +80,32 @@ export default function Dashboard() {
   };
 
   // --- UTILS ---
+  
+  // ✅ FIXED: Dynamic Import for PDF.js (Prevents Server Crash on Vercel)
   const generateThumbnail = async (file) => {
     try {
+      // 1. Load Library ONLY on Client (inside the function)
+      const pdfjsLib = await import('pdfjs-dist/build/pdf');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+      // 2. Process File
       const fileUrl = URL.createObjectURL(file);
       const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1);
-      const viewport = page.getViewport({ scale: 0.5 });
+      const page = await pdf.getPage(1); // Get Page 1
+      
+      const viewport = page.getViewport({ scale: 0.5 }); // Scale down
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       canvas.height = viewport.height;
       canvas.width = viewport.width;
+
       await page.render({ canvasContext: context, viewport: viewport }).promise;
-      return canvas.toDataURL('image/jpeg', 0.8);
-    } catch (error) { return null; }
+      return canvas.toDataURL('image/jpeg', 0.8); // Return Base64 Image
+    } catch (error) {
+      console.error("Thumbnail error:", error);
+      return null;
+    }
   };
 
   const stripHtml = (html) => {
@@ -110,8 +118,14 @@ export default function Dashboard() {
     if (!text) return '';
     let clean = text.replace(/```html|```/gi, '');
     const bodyMatch = clean.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-    if (bodyMatch && bodyMatch[1]) clean = bodyMatch[1];
-    else clean = clean.replace(/<!DOCTYPE html>/gi, '').replace(/<html[^>]*>/gi, '').replace(/<\/html>/gi, '').replace(/<head>[\s\S]*?<\/head>/gi, '');
+    if (bodyMatch && bodyMatch[1]) {
+      clean = bodyMatch[1];
+    } else {
+      clean = clean.replace(/<!DOCTYPE html>/gi, '')
+                   .replace(/<html[^>]*>/gi, '')
+                   .replace(/<\/html>/gi, '')
+                   .replace(/<head>[\s\S]*?<\/head>/gi, '');
+    }
     return clean.trim();
   };
 
@@ -140,7 +154,9 @@ export default function Dashboard() {
 
   const filteredTranscript = useMemo(() => {
     if (!transcriptSearch) return transcription;
-    return transcription.split('\n').filter(line => line.toLowerCase().includes(transcriptSearch.toLowerCase())).join('\n___\n');
+    return transcription.split('\n').filter(line => 
+      line.toLowerCase().includes(transcriptSearch.toLowerCase())
+    ).join('\n___\n');
   }, [transcriptSearch, transcription]);
 
   // --- GOOGLE CALENDAR ---
@@ -154,6 +170,7 @@ export default function Dashboard() {
         sessionStorage.setItem('google_access_token', token);
       } catch (e) { alert("Calendar access required."); return null; }
     }
+
     const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const event = {
       summary: meetingData.title,
@@ -164,6 +181,7 @@ export default function Dashboard() {
       reminders: { useDefault: false, overrides: [{ method: 'email', minutes: 30 }, { method: 'popup', minutes: 10 }] },
       conferenceData: { createRequest: { requestId: Math.random().toString(36).substring(7) } }
     };
+
     try {
       const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, {
         method: "POST", headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(event)
@@ -171,26 +189,24 @@ export default function Dashboard() {
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
       
-      // ✅ FIX: Return the Google Meet Link (hangoutLink) if available, else HTML Link
-      console.log("Link generated:", data.hangoutLink);
+      // Return Hangout link or HTML link
       return data.hangoutLink || data.htmlLink;
-      
+
     } catch (error) { alert("Schedule failed: " + error.message); return null; }
   };
 
-  // --- WIZARD ACTIONS ---
+  // --- ACTIONS ---
   const handleNextStep1 = async () => {
-    if (!formData.title || !formData.startTime || !formData.endTime) return alert("Fill all details.");
-    if (new Date(formData.startTime) >= new Date(formData.endTime)) return alert("End time must be after start time.");
-    
+    if (!formData.title || !formData.startTime || !formData.endTime) { alert("Required fields missing."); return; }
     setLoading(true);
     const calendarLink = await createGoogleCalendarEvent(formData);
     if (!calendarLink) { setLoading(false); return; }
 
     const meetingData = { ...formData, userId: user.uid, meetingLink: calendarLink };
     try {
+      let res;
       if (!currentMeetingId) {
-        const res = await axios.post('/api/meetings', meetingData);
+        res = await axios.post('/api/meetings', meetingData);
         setCurrentMeetingId(res.data.data._id);
       } else {
         await axios.put('/api/meetings', { id: currentMeetingId, ...meetingData });
@@ -200,29 +216,37 @@ export default function Dashboard() {
     setLoading(false);
   };
 
+  // Polls Logic
   const handlePollOptionChange = (index, value) => {
     const newOptions = [...pollOptions];
     newOptions[index] = value;
     setPollOptions(newOptions);
   };
-  const addPollOptionField = () => setPollOptions([...pollOptions, '']);
+
+  const addPollOptionField = () => {
+    setPollOptions([...pollOptions, '']);
+  };
+
   const savePollToLocal = () => {
     if (!pollQuestion.trim()) return alert("Enter question");
     const validOptions = pollOptions.filter(opt => opt.trim() !== "");
     if (validOptions.length < 2) return alert("Need 2+ options");
+
     const newPoll = { question: pollQuestion, options: validOptions };
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
     setPollQuestion(''); setPollOptions(['', '']);
   };
+
   const deletePoll = (index) => {
     const newPolls = [...formData.polls];
     newPolls.splice(index, 1);
     setFormData({ ...formData, polls: newPolls });
   };
 
+  // ✅ UPLOAD STEP: Handles Firebase Upload + Thumbnail Generation
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
-    setUploading(true); 
+    setUploading(true);
     
     let uploadedUrl = "";
     let uploadedName = "";
@@ -230,15 +254,20 @@ export default function Dashboard() {
 
     try {
       if (pptFile) {
+        // 1. Generate Thumbnail
+        console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
         setPptPreview(thumbnailUrl);
 
+        // 2. Upload PDF to Firebase Storage
+        console.log("Uploading file...");
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
         const snapshot = await uploadBytes(fileRef, pptFile);
         uploadedUrl = await getDownloadURL(snapshot.ref);
         uploadedName = pptFile.name;
       }
 
+      // 3. Save ALL data to MongoDB
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
@@ -248,7 +277,10 @@ export default function Dashboard() {
       });
       
       setStep(3);
-    } catch (e) { alert("Upload failed: " + e.message); }
+    } catch (e) { 
+        console.error(e);
+        alert("Upload failed: " + e.message); 
+    }
     setUploading(false);
   };
 
@@ -266,7 +298,9 @@ export default function Dashboard() {
       sumData.append("text", transRes.data.text);
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      const displaySummary = cleanSummaryForDisplay(sumRes.data.summary);
+      const rawSummary = sumRes.data.summary; 
+      const displaySummary = cleanSummaryForDisplay(rawSummary);
+
       setTranscription(transRes.data.text);
       setSummary(displaySummary);
 
@@ -282,7 +316,7 @@ export default function Dashboard() {
     if (process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK) {
         try { await axios.post(process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK, {
               meetingId: currentMeetingId, title: formData.title, summary: stripHtml(summary), transcription, attendees: formData.attendees
-        }); alert("Shared!"); } catch(e) {}
+        }); alert("Assets shared!"); } catch(e) {}
     }
     setShowShareModal(false); setView('list'); setStep(1); fetchMeetings(user.uid);
   };
@@ -306,9 +340,10 @@ export default function Dashboard() {
         </div>
       </nav>
 
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 relative overflow-hidden">
         
-        {/* LIST VIEW */}
+        {/* VIEW: LIST */}
         {view === 'list' && (
           <div className="absolute inset-0 overflow-y-auto p-8 custom-scrollbar">
             <div className="max-w-7xl mx-auto w-full">
@@ -330,7 +365,7 @@ export default function Dashboard() {
                         {status === 'ongoing' && <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse"><Radio size={12}/> Ongoing</span>}
                         {status === 'upcoming' && <span className="px-3 py-1 bg-zinc-800 text-gray-300 text-xs rounded border border-zinc-700 flex items-center gap-2"><Clock size={12}/> Upcoming</span>}
                         <span className="text-xs text-gray-500 flex items-center gap-1 mr-2"><Users size={12}/> {m.attendees ? m.attendees.split(',').length : 0}</span>
-                        {m.meetingLink && <button onClick={(e) => { e.stopPropagation(); copyText(m.meetingLink); }} className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all"><LinkIcon size={16}/></button>}
+                        {m.meetingLink && <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.meetingLink); alert("Link copied!"); }} className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all"><LinkIcon size={16}/></button>}
                         </div>
                     </div>
                     );
@@ -340,7 +375,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* WIZARD VIEW */}
+        {/* VIEW: CREATE WIZARD */}
         {view === 'create' && (
            <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center custom-scrollbar">
              <div className="w-full max-w-3xl">
@@ -422,7 +457,6 @@ export default function Dashboard() {
                     </div>
                     </div>
                     <div className="flex gap-3">
-                        {/* Header Share Button */}
                         <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
                     </div>
                 </div>
