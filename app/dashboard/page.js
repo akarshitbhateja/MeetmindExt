@@ -83,36 +83,42 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ FIXED THUMBNAIL GENERATOR (Browser Only)
+  // ✅ 1. FIXED THUMBNAIL GENERATOR (Legacy Build + Worker Fix)
   const generateThumbnail = async (file) => {
-    if (typeof window === "undefined") return null; // Guard for SSR
+    if (typeof window === "undefined") return null;
 
     try {
-      // Dynamic import
-      const pdfjsLib = await import('pdfjs-dist/build/pdf');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+      // ✅ USE LEGACY BUILD (THIS IS THE FIX)
+      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf");
+
+      // ✅ CORRECT WORKER SETUP FOR NEXT.JS
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+        "pdfjs-dist/legacy/build/pdf.worker.min.js",
+        import.meta.url
+      ).toString();
 
       const fileUrl = URL.createObjectURL(file);
       const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1); // Page 1
-      
-      const viewport = page.getViewport({ scale: 1.0 }); // Good resolution
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d');
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
 
-      await page.render({ canvasContext: context, viewport: viewport }).promise;
-      
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-      
-      // Cleanup
+      const page = await pdf.getPage(1);
+
+      const viewport = page.getViewport({ scale: 1.25 });
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({ canvasContext: context, viewport }).promise;
+
+      const thumbnail = canvas.toDataURL("image/jpeg", 0.85);
+
       URL.revokeObjectURL(fileUrl);
-      
-      return dataUrl;
-    } catch (error) {
-      console.error("Thumbnail error:", error);
+
+      return thumbnail;
+    } catch (err) {
+      console.error("PDF thumbnail failed:", err);
       return null;
     }
   };
@@ -208,11 +214,11 @@ export default function Dashboard() {
 
   // --- ACTIONS ---
   
-  // DELETE ACTION
+  // ✅ 2. DELETE ACTION
   const handleDeleteMeeting = async () => {
     setLoading(true);
     try {
-        // 1. Delete from Google Calendar
+        // A. Delete from Google Calendar
         if (formData.googleEventId) {
             let token = sessionStorage.getItem('google_access_token');
             if (!token) {
@@ -227,20 +233,20 @@ export default function Dashboard() {
             });
         }
 
-        // 2. Delete Files from Firebase
+        // B. Delete Files from Firebase
         try {
             const folderRef = ref(storage, `meetings/${currentMeetingId}`);
             const listRes = await listAll(folderRef);
             await Promise.all(listRes.items.map((item) => deleteObject(item)));
-        } catch(e) { console.log("Firebase cleanup skipped"); }
+        } catch(e) { console.log("Firebase cleanup skipped", e); }
 
-        // 3. Delete from MongoDB
+        // C. Delete from MongoDB
         await axios.delete(`/api/meetings?id=${currentMeetingId}`);
 
         setShowDeleteModal(false);
         setView('list');
         fetchMeetings(user.uid);
-        alert("Meeting deleted successfully.");
+        alert("Meeting deleted successfully. Cancellation sent.");
 
     } catch (error) {
         console.error(error);
@@ -253,6 +259,7 @@ export default function Dashboard() {
     if (!formData.title || !formData.startTime || !formData.endTime) { alert("Required fields missing."); return; }
     setLoading(true);
     
+    // Create Calendar Event
     const result = await createGoogleCalendarEvent(formData);
     if (!result) { setLoading(false); return; }
 
@@ -276,6 +283,7 @@ export default function Dashboard() {
     setLoading(false);
   };
 
+  // Polls Logic
   const handlePollOptionChange = (index, value) => {
     const newOptions = [...pollOptions];
     newOptions[index] = value;
@@ -302,23 +310,29 @@ export default function Dashboard() {
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // ✅ UPLOAD STEP: Logic Fixed for Thumbnail
+  // ✅ 3. UPLOAD LOGIC
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
     setUploading(true);
     
-    let uploadedUrl = "";
-    let uploadedName = "";
-    let thumbnailUrl = "";
-
     try {
+      let uploadedUrl = "";
+      let uploadedName = "";
+      let thumbnailUrl = "";
+
       if (pptFile) {
-        // 1. Generate Thumbnail First
+        // 1. Generate the thumbnail (using legacy PDF logic)
         console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
-        setPptPreview(thumbnailUrl);
+        
+        if (thumbnailUrl) {
+            console.log("Thumbnail Generated!");
+            setPptPreview(thumbnailUrl);
+        } else {
+            console.warn("Thumbnail generation failed, continuing without it.");
+        }
 
-        // 2. Upload PDF to Firebase Storage
+        // 2. Upload PDF to Firebase
         console.log("Uploading file...");
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
         const snapshot = await uploadBytes(fileRef, pptFile);
@@ -326,7 +340,7 @@ export default function Dashboard() {
         uploadedName = pptFile.name;
       }
 
-      // 3. Save EVERYTHING to MongoDB
+      // 3. Save to Mongo including thumbnail
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
@@ -335,7 +349,7 @@ export default function Dashboard() {
         pptThumbnail: thumbnailUrl 
       });
       
-      // Update local state so the next screen knows about it
+      // Sync local state
       setFormData(prev => ({
         ...prev, 
         pptUrl: uploadedUrl, 
@@ -423,9 +437,9 @@ export default function Dashboard() {
                     const status = getMeetingStatus(m.startTime, m.endTime);
                     return (
                     <div key={m._id} onClick={() => { 
-                        // ✅ FIX: Ensure thumbnail is passed correctly when opening
+                        // ✅ FIX: Ensure state is synced when opening
                         setFormData(m); 
-                        setPptPreview(m.pptThumbnail); // Set preview state
+                        setPptPreview(m.pptThumbnail || null); 
                         setCurrentMeetingId(m._id); 
                         setTranscription(m.transcription || ''); 
                         setSummary(cleanSummaryForDisplay(m.summary) || ''); 
@@ -482,7 +496,7 @@ export default function Dashboard() {
                             <div className="flex flex-col items-center"><div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-2"></div><span className="text-sm text-green-400">Processing PDF...</span></div>
                         ) : pptPreview ? (
                             <div className="relative w-full h-40 bg-zinc-800 rounded-lg overflow-hidden flex flex-col items-center">
-                                {/* ✅ FIX: Use local state pptPreview for immediate feedback */}
+                                {/* ✅ SHOW GENERATED PREVIEW IMMEDIATELY */}
                                 <img src={pptPreview} alt="Slide 1" className="h-full object-contain" />
                                 <div className="absolute bottom-0 w-full bg-black/70 text-xs p-2 text-center text-white">{pptFile?.name || "Uploaded File"}</div>
                             </div>
@@ -519,7 +533,7 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (PREMIUM CARD UI + DELETE BUTTON) */}
+        {/* VIEW: DETAIL */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
@@ -552,10 +566,15 @@ export default function Dashboard() {
 
                         {/* ✅ PREMIUM ASSET CARD */}
                         <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
-                            {/* Thumbnail Image */}
+                            {/* 1. Thumbnail Image */}
                             <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
                                 {formData.pptThumbnail ? (
-                                    <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
+                                    <img 
+                                        src={formData.pptThumbnail} 
+                                        onError={(e) => e.currentTarget.style.display = 'none'} 
+                                        className="h-full w-full object-cover opacity-80" 
+                                        alt="Slide Preview" 
+                                    />
                                 ) : (
                                     <div className="flex flex-col items-center text-zinc-600 gap-2">
                                         <FileText size={32}/>
@@ -564,18 +583,22 @@ export default function Dashboard() {
                                 )}
                             </div>
 
-                            {/* Details */}
+                            {/* 2. File Details */}
                             <div className="p-5 space-y-4">
                                 {formData.meetingLink && (
                                     <div>
                                         <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Video Link</label>
                                         <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg border border-zinc-800">
                                             <Video size={16} className="text-green-500"/>
-                                            <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">{formData.meetingLink.replace('https://', '')}</a>
+                                            <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">
+                                                {formData.meetingLink.replace('https://', '')}
+                                            </a>
                                             <button onClick={() => copyText(formData.meetingLink)} className="text-zinc-400 hover:text-white"><Copy size={14}/></button>
                                         </div>
                                     </div>
                                 )}
+
+                                {/* Filename Row */}
                                 {formData.pptName && (
                                     <div className="flex items-center justify-between border-t border-zinc-800 pt-3 mt-3">
                                         <div>
@@ -597,7 +620,7 @@ export default function Dashboard() {
                         )}
                     </div>
 
-                    {/* RIGHT COLUMN (AI Hub) */}
+                    {/* RIGHT COLUMN */}
                     <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
                         <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
                             {['summary', 'transcript', 'upload'].map((tab) => (
