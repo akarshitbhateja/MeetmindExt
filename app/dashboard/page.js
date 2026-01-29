@@ -7,9 +7,8 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// ✅ FIX 1: Robust PDF Worker Setup (HTTPS)
-import * as pdfjsLib from 'pdfjs-dist/build/pdf';
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// ✅ VERCEL FIX: Removed top-level PDF imports. 
+// We will load PDF.js dynamically ONLY when needed in the browser.
 
 import { 
   Plus, Calendar, Clock, Users, FileText, 
@@ -18,6 +17,7 @@ import {
   Video, FileType, AlertTriangle
 } from 'lucide-react';
 
+// Firebase Storage
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
@@ -86,23 +86,28 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ FIX: Robust Thumbnail Generation
+  // ✅ FIX: Dynamic Import for PDF.js (Prevents Server Crash on Vercel)
   const generateThumbnail = async (file) => {
     try {
-      // Use the global worker set at the top
+      // 1. Load Library ONLY on Client (inside the function)
+      // This prevents the "DOMMatrix is not defined" error during build
+      const pdfjsLib = await import('pdfjs-dist/build/pdf');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+      // 2. Process File
       const fileUrl = URL.createObjectURL(file);
       const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1); // Page 1
+      const page = await pdf.getPage(1); // Get Page 1
       
-      const viewport = page.getViewport({ scale: 1.0 }); // Better resolution
+      const viewport = page.getViewport({ scale: 0.5 }); // Scale down
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       canvas.height = viewport.height;
       canvas.width = viewport.width;
 
       await page.render({ canvasContext: context, viewport: viewport }).promise;
-      return canvas.toDataURL('image/jpeg', 0.9);
+      return canvas.toDataURL('image/jpeg', 0.8); // Return Base64 Image
     } catch (error) {
       console.error("Thumbnail error:", error);
       return null;
@@ -119,8 +124,14 @@ export default function Dashboard() {
     if (!text) return '';
     let clean = text.replace(/```html|```/gi, '');
     const bodyMatch = clean.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-    if (bodyMatch && bodyMatch[1]) clean = bodyMatch[1];
-    else clean = clean.replace(/<!DOCTYPE html>/gi, '').replace(/<html[^>]*>/gi, '').replace(/<\/html>/gi, '').replace(/<head>[\s\S]*?<\/head>/gi, '');
+    if (bodyMatch && bodyMatch[1]) {
+      clean = bodyMatch[1];
+    } else {
+      clean = clean.replace(/<!DOCTYPE html>/gi, '')
+                   .replace(/<html[^>]*>/gi, '')
+                   .replace(/<\/html>/gi, '')
+                   .replace(/<head>[\s\S]*?<\/head>/gi, '');
+    }
     return clean.trim();
   };
 
@@ -149,11 +160,12 @@ export default function Dashboard() {
 
   const filteredTranscript = useMemo(() => {
     if (!transcriptSearch) return transcription;
-    return transcription.split('\n').filter(line => line.toLowerCase().includes(transcriptSearch.toLowerCase())).join('\n___\n');
+    return transcription.split('\n').filter(line => 
+      line.toLowerCase().includes(transcriptSearch.toLowerCase())
+    ).join('\n___\n');
   }, [transcriptSearch, transcription]);
 
   // --- GOOGLE CALENDAR ---
-  
   const createGoogleCalendarEvent = async (meetingData) => {
     let token = sessionStorage.getItem('google_access_token');
     if (!token) {
@@ -183,7 +195,7 @@ export default function Dashboard() {
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
       
-      // ✅ FIX: Return BOTH Link and Event ID (Needed for delete)
+      // Return Hangout link (Meet) OR htmlLink (Calendar) AND ID
       return { 
           link: data.hangoutLink || data.htmlLink,
           id: data.id 
@@ -201,7 +213,6 @@ export default function Dashboard() {
         // 1. Delete from Google Calendar (Sends Cancellation Emails)
         if (formData.googleEventId) {
             let token = sessionStorage.getItem('google_access_token');
-            // If token missing, try getting it silently or ask user
             if (!token) {
                 const result = await signInWithPopup(auth, provider);
                 token = GoogleAuthProvider.credentialFromResult(result).accessToken;
@@ -214,7 +225,6 @@ export default function Dashboard() {
             }).then(res => {
                 if(!res.ok && res.status !== 404 && res.status !== 410) throw new Error("Google Calendar Delete Failed");
             });
-            console.log("Deleted from Google Calendar");
         }
 
         // 2. Delete Files from Firebase
@@ -239,11 +249,11 @@ export default function Dashboard() {
   };
 
   const handleNextStep1 = async () => {
-    if (!formData.title || !formData.startTime || !formData.endTime) return alert("Fill all details.");
-    if (new Date(formData.startTime) >= new Date(formData.endTime)) return alert("End time must be after start time.");
-    
+    if (!formData.title || !formData.startTime || !formData.endTime) { alert("Required fields missing."); return; }
     setLoading(true);
-    const result = await createGoogleCalendarEvent(formData); // Now returns Object
+    
+    // Create Calendar Event
+    const result = await createGoogleCalendarEvent(formData);
     if (!result) { setLoading(false); return; }
 
     const meetingData = { 
@@ -254,8 +264,9 @@ export default function Dashboard() {
     };
 
     try {
+      let res;
       if (!currentMeetingId) {
-        const res = await axios.post('/api/meetings', meetingData);
+        res = await axios.post('/api/meetings', meetingData);
         setCurrentMeetingId(res.data.data._id);
       } else {
         await axios.put('/api/meetings', { id: currentMeetingId, ...meetingData });
@@ -265,7 +276,6 @@ export default function Dashboard() {
     setLoading(false);
   };
 
-  // Polls Logic
   const handlePollOptionChange = (index, value) => {
     const newOptions = [...pollOptions];
     newOptions[index] = value;
@@ -280,6 +290,7 @@ export default function Dashboard() {
     if (!pollQuestion.trim()) return alert("Enter question");
     const validOptions = pollOptions.filter(opt => opt.trim() !== "");
     if (validOptions.length < 2) return alert("Need 2+ options");
+
     const newPoll = { question: pollQuestion, options: validOptions };
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
     setPollQuestion(''); setPollOptions(['', '']);
@@ -291,7 +302,7 @@ export default function Dashboard() {
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // Upload Logic with Thumbnail
+  // ✅ UPLOAD STEP: Handles Firebase Upload + Thumbnail Generation
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
     setUploading(true);
@@ -302,10 +313,12 @@ export default function Dashboard() {
 
     try {
       if (pptFile) {
+        // 1. Generate Thumbnail (Dynamic Import used inside here)
         console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
         setPptPreview(thumbnailUrl);
 
+        // 2. Upload PDF to Firebase Storage
         console.log("Uploading file...");
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
         const snapshot = await uploadBytes(fileRef, pptFile);
@@ -313,6 +326,7 @@ export default function Dashboard() {
         uploadedName = pptFile.name;
       }
 
+      // 3. Save ALL data to MongoDB
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
@@ -321,10 +335,11 @@ export default function Dashboard() {
         pptThumbnail: thumbnailUrl 
       });
       
-      // Update local state immediately for UI
-      setFormData(prev => ({...prev, pptUrl: uploadedUrl, pptName: uploadedName, pptThumbnail: thumbnailUrl }));
       setStep(3);
-    } catch (e) { alert("Upload failed: " + e.message); }
+    } catch (e) { 
+        console.error(e);
+        alert("Upload failed: " + e.message); 
+    }
     setUploading(false);
   };
 
@@ -342,7 +357,9 @@ export default function Dashboard() {
       sumData.append("text", transRes.data.text);
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      const displaySummary = cleanSummaryForDisplay(sumRes.data.summary);
+      const rawSummary = sumRes.data.summary; 
+      const displaySummary = cleanSummaryForDisplay(rawSummary);
+
       setTranscription(transRes.data.text);
       setSummary(displaySummary);
 
@@ -382,10 +399,10 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      {/* MAIN CONTENT */}
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 relative overflow-hidden">
         
-        {/* LIST VIEW */}
+        {/* VIEW: LIST */}
         {view === 'list' && (
           <div className="absolute inset-0 overflow-y-auto p-8 custom-scrollbar">
             <div className="max-w-7xl mx-auto w-full">
@@ -417,7 +434,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* WIZARD VIEW */}
+        {/* VIEW: CREATE WIZARD */}
         {view === 'create' && (
            <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center custom-scrollbar">
              <div className="w-full max-w-3xl">
@@ -484,7 +501,7 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL */}
+        {/* VIEW: DETAIL (Premium Card UI) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
@@ -510,6 +527,7 @@ export default function Dashboard() {
                         <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
                     </div>
 
+                    {/* Premium Asset Card */}
                     <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
                         <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
                             {formData.pptThumbnail ? (
@@ -625,7 +643,7 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
-      {/* ✅ DELETE CONFIRMATION MODAL */}
+      {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {showDeleteModal && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
