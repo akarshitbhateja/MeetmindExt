@@ -7,15 +7,18 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// ✅ NOTE: PDFJS is now imported dynamically inside generateThumbnail to fix Vercel Build Error
+// PDF Lib Imports
+import * as pdfjsLib from 'pdfjs-dist/build/pdf';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 import { 
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
-  PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2
+  PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2,
+  Video, FileType
 } from 'lucide-react';
 
-// Firebase Storage Imports
+// Firebase Storage
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
@@ -81,32 +84,20 @@ export default function Dashboard() {
   };
 
   // --- UTILS ---
-  
-  // ✅ FIXED: Dynamic Import for PDF.js (Prevents Server Crash)
   const generateThumbnail = async (file) => {
     try {
-      // 1. Load Library ONLY on Client
-      const pdfjsLib = await import('pdfjs-dist/build/pdf');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
-      // 2. Process File
       const fileUrl = URL.createObjectURL(file);
       const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1); // Get Page 1
-      
-      const viewport = page.getViewport({ scale: 0.5 }); // Scale down
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: 0.5 });
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       canvas.height = viewport.height;
       canvas.width = viewport.width;
-
       await page.render({ canvasContext: context, viewport: viewport }).promise;
-      return canvas.toDataURL('image/jpeg', 0.8); // Return Base64 Image
-    } catch (error) {
-      console.error("Thumbnail error:", error);
-      return null;
-    }
+      return canvas.toDataURL('image/jpeg', 0.8);
+    } catch (error) { return null; }
   };
 
   const stripHtml = (html) => {
@@ -119,21 +110,14 @@ export default function Dashboard() {
     if (!text) return '';
     let clean = text.replace(/```html|```/gi, '');
     const bodyMatch = clean.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-    if (bodyMatch && bodyMatch[1]) {
-      clean = bodyMatch[1];
-    } else {
-      clean = clean.replace(/<!DOCTYPE html>/gi, '')
-                   .replace(/<html[^>]*>/gi, '')
-                   .replace(/<\/html>/gi, '')
-                   .replace(/<head>[\s\S]*?<\/head>/gi, '');
-    }
+    if (bodyMatch && bodyMatch[1]) clean = bodyMatch[1];
+    else clean = clean.replace(/<!DOCTYPE html>/gi, '').replace(/<html[^>]*>/gi, '').replace(/<\/html>/gi, '').replace(/<head>[\s\S]*?<\/head>/gi, '');
     return clean.trim();
   };
 
   const copyText = (content) => {
-    const plainText = stripHtml(content);
-    navigator.clipboard.writeText(plainText);
-    alert("Copied plain text to clipboard!");
+    navigator.clipboard.writeText(content);
+    alert("Copied to clipboard!");
   };
 
   const exportSummary = () => {
@@ -156,9 +140,7 @@ export default function Dashboard() {
 
   const filteredTranscript = useMemo(() => {
     if (!transcriptSearch) return transcription;
-    return transcription.split('\n').filter(line => 
-      line.toLowerCase().includes(transcriptSearch.toLowerCase())
-    ).join('\n___\n');
+    return transcription.split('\n').filter(line => line.toLowerCase().includes(transcriptSearch.toLowerCase())).join('\n___\n');
   }, [transcriptSearch, transcription]);
 
   // --- GOOGLE CALENDAR ---
@@ -172,7 +154,6 @@ export default function Dashboard() {
         sessionStorage.setItem('google_access_token', token);
       } catch (e) { alert("Calendar access required."); return null; }
     }
-
     const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const event = {
       summary: meetingData.title,
@@ -183,29 +164,33 @@ export default function Dashboard() {
       reminders: { useDefault: false, overrides: [{ method: 'email', minutes: 30 }, { method: 'popup', minutes: 10 }] },
       conferenceData: { createRequest: { requestId: Math.random().toString(36).substring(7) } }
     };
-
     try {
       const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, {
         method: "POST", headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(event)
       });
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
-      return data.htmlLink;
+      
+      // ✅ FIX: Return the Google Meet Link (hangoutLink) if available, else HTML Link
+      console.log("Link generated:", data.hangoutLink);
+      return data.hangoutLink || data.htmlLink;
+      
     } catch (error) { alert("Schedule failed: " + error.message); return null; }
   };
 
-  // --- ACTIONS ---
+  // --- WIZARD ACTIONS ---
   const handleNextStep1 = async () => {
-    if (!formData.title || !formData.startTime) { alert("Required fields missing."); return; }
+    if (!formData.title || !formData.startTime || !formData.endTime) return alert("Fill all details.");
+    if (new Date(formData.startTime) >= new Date(formData.endTime)) return alert("End time must be after start time.");
+    
     setLoading(true);
     const calendarLink = await createGoogleCalendarEvent(formData);
     if (!calendarLink) { setLoading(false); return; }
 
     const meetingData = { ...formData, userId: user.uid, meetingLink: calendarLink };
     try {
-      let res;
       if (!currentMeetingId) {
-        res = await axios.post('/api/meetings', meetingData);
+        const res = await axios.post('/api/meetings', meetingData);
         setCurrentMeetingId(res.data.data._id);
       } else {
         await axios.put('/api/meetings', { id: currentMeetingId, ...meetingData });
@@ -215,37 +200,29 @@ export default function Dashboard() {
     setLoading(false);
   };
 
-  // Polls Logic
   const handlePollOptionChange = (index, value) => {
     const newOptions = [...pollOptions];
     newOptions[index] = value;
     setPollOptions(newOptions);
   };
-
-  const addPollOptionField = () => {
-    setPollOptions([...pollOptions, '']);
-  };
-
+  const addPollOptionField = () => setPollOptions([...pollOptions, '']);
   const savePollToLocal = () => {
     if (!pollQuestion.trim()) return alert("Enter question");
     const validOptions = pollOptions.filter(opt => opt.trim() !== "");
     if (validOptions.length < 2) return alert("Need 2+ options");
-
     const newPoll = { question: pollQuestion, options: validOptions };
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
     setPollQuestion(''); setPollOptions(['', '']);
   };
-
   const deletePoll = (index) => {
     const newPolls = [...formData.polls];
     newPolls.splice(index, 1);
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // ✅ UPLOAD STEP: Handles Firebase Upload + Thumbnail Generation
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
-    setUploading(true);
+    setUploading(true); 
     
     let uploadedUrl = "";
     let uploadedName = "";
@@ -253,20 +230,15 @@ export default function Dashboard() {
 
     try {
       if (pptFile) {
-        // 1. Generate Thumbnail
-        console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
         setPptPreview(thumbnailUrl);
 
-        // 2. Upload PDF to Firebase Storage
-        console.log("Uploading file...");
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
         const snapshot = await uploadBytes(fileRef, pptFile);
         uploadedUrl = await getDownloadURL(snapshot.ref);
         uploadedName = pptFile.name;
       }
 
-      // 3. Save ALL data to MongoDB
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
@@ -276,10 +248,7 @@ export default function Dashboard() {
       });
       
       setStep(3);
-    } catch (e) { 
-        console.error(e);
-        alert("Upload failed: " + e.message); 
-    }
+    } catch (e) { alert("Upload failed: " + e.message); }
     setUploading(false);
   };
 
@@ -297,9 +266,7 @@ export default function Dashboard() {
       sumData.append("text", transRes.data.text);
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      const rawSummary = sumRes.data.summary; 
-      const displaySummary = cleanSummaryForDisplay(rawSummary);
-
+      const displaySummary = cleanSummaryForDisplay(sumRes.data.summary);
       setTranscription(transRes.data.text);
       setSummary(displaySummary);
 
@@ -315,7 +282,7 @@ export default function Dashboard() {
     if (process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK) {
         try { await axios.post(process.env.NEXT_PUBLIC_PABBLY_POST_MEETING_WEBHOOK, {
               meetingId: currentMeetingId, title: formData.title, summary: stripHtml(summary), transcription, attendees: formData.attendees
-        }); alert("Assets shared!"); } catch(e) {}
+        }); alert("Shared!"); } catch(e) {}
     }
     setShowShareModal(false); setView('list'); setStep(1); fetchMeetings(user.uid);
   };
@@ -339,10 +306,9 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      {/* MAIN CONTENT AREA */}
       <main className="flex-1 relative overflow-hidden">
         
-        {/* VIEW: LIST */}
+        {/* LIST VIEW */}
         {view === 'list' && (
           <div className="absolute inset-0 overflow-y-auto p-8 custom-scrollbar">
             <div className="max-w-7xl mx-auto w-full">
@@ -364,7 +330,7 @@ export default function Dashboard() {
                         {status === 'ongoing' && <span className="px-3 py-1 bg-yellow-900/20 text-yellow-500 text-xs font-semibold rounded border border-yellow-900/30 flex items-center gap-1 animate-pulse"><Radio size={12}/> Ongoing</span>}
                         {status === 'upcoming' && <span className="px-3 py-1 bg-zinc-800 text-gray-300 text-xs rounded border border-zinc-700 flex items-center gap-2"><Clock size={12}/> Upcoming</span>}
                         <span className="text-xs text-gray-500 flex items-center gap-1 mr-2"><Users size={12}/> {m.attendees ? m.attendees.split(',').length : 0}</span>
-                        {m.meetingLink && <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.meetingLink); alert("Link copied!"); }} className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all"><LinkIcon size={16}/></button>}
+                        {m.meetingLink && <button onClick={(e) => { e.stopPropagation(); copyText(m.meetingLink); }} className="p-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:text-white text-gray-400 rounded-lg transition-all"><LinkIcon size={16}/></button>}
                         </div>
                     </div>
                     );
@@ -374,7 +340,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* VIEW: CREATE WIZARD */}
+        {/* WIZARD VIEW */}
         {view === 'create' && (
            <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center custom-scrollbar">
              <div className="w-full max-w-3xl">
@@ -415,7 +381,6 @@ export default function Dashboard() {
                             </>
                         )}
                       </div>
-
                       <div className="bg-black/40 border border-zinc-700 rounded-lg p-4">
                           <h4 className="text-sm font-semibold mb-3">Create Poll</h4>
                           <input className="w-full bg-zinc-900 border border-zinc-800 rounded p-2 text-sm mb-2" placeholder="Question" value={pollQuestion} onChange={e => setPollQuestion(e.target.value)}/>
@@ -425,19 +390,9 @@ export default function Dashboard() {
                           <button onClick={addPollOptionField} className="text-xs text-green-500 mb-4 hover:underline block">+ Add Option</button>
                           <button onClick={savePollToLocal} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded text-sm flex items-center justify-center gap-2"><Plus size={14}/> Add Poll</button>
                       </div>
-                      
-                      {/* Saved Polls List */}
                       {formData.polls.length > 0 && (
-                          <div className="space-y-2">
-                              {formData.polls.map((p, i) => (
-                                  <div key={i} className="bg-zinc-900 px-3 py-2 rounded flex justify-between items-center border border-zinc-800">
-                                      <span className="text-sm">{p.question}</span>
-                                      <button onClick={() => deletePoll(i)} className="text-gray-500 hover:text-red-500"><Trash2 size={14}/></button>
-                                  </div>
-                              ))}
-                          </div>
+                          <div className="space-y-2">{formData.polls.map((p, i) => (<div key={i} className="bg-zinc-900 px-3 py-2 rounded flex justify-between items-center border border-zinc-800"><span className="text-sm">{p.question}</span><button onClick={() => deletePoll(i)} className="text-gray-500 hover:text-red-500"><Trash2 size={14}/></button></div>))}</div>
                       )}
-
                       <div className="flex justify-between pt-4"><button onClick={() => setStep(1)} className="text-gray-400">&lt; Back</button><button onClick={handleNextStep2} disabled={uploading} className="bg-green-600 text-black font-bold px-8 py-3 rounded-lg disabled:opacity-50">Next &gt;</button></div>
                     </div>
                   )}
@@ -452,10 +407,11 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (Centered) */}
+        {/* VIEW: DETAIL (PREMIUM CARD UI ADDED HERE) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
+                {/* Header */}
                 <div className="flex justify-between items-start border-b border-white/10 pb-6 shrink-0">
                     <div>
                     <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
@@ -466,34 +422,80 @@ export default function Dashboard() {
                     </div>
                     </div>
                     <div className="flex gap-3">
-                    {formData.meetingLink && <button onClick={() => copyText(formData.meetingLink)} className="bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><LinkIcon size={16}/> Copy Link</button>}
-                    <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
+                        {/* Header Share Button */}
+                        <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
                     </div>
                 </div>
 
                 <div className="grid grid-cols-12 gap-8 mt-6 flex-1 min-h-0">
+                    {/* LEFT COLUMN */}
                     <div className="col-span-4 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
-                    <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                        <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
-                        <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
-                    </div>
-                    {/* PPT Preview in Detail View */}
-                    {formData.pptThumbnail && (
-                        <div className="bg-zinc-900/50 border border-white/10 p-4 rounded-2xl">
-                            <h3 className="font-semibold mb-3 text-white/80 uppercase text-xs tracking-wider">Presentation</h3>
-                            <div className="rounded-lg overflow-hidden border border-zinc-800 cursor-pointer hover:border-green-500 transition" onClick={() => window.open(formData.pptUrl, '_blank')}>
-                                <img src={formData.pptThumbnail} className="w-full h-auto" alt="PPT Preview" />
+                        
+                        <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
+                            <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
+                            <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
+                        </div>
+
+                        {/* ✅ NEW PREMIUM ASSET CARD */}
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
+                            {/* 1. Thumbnail Image */}
+                            <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
+                                {formData.pptThumbnail ? (
+                                    <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
+                                ) : (
+                                    <div className="flex flex-col items-center text-zinc-600 gap-2">
+                                        <FileText size={32}/>
+                                        <span className="text-xs">No Preview</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 2. File Details */}
+                            <div className="p-5 space-y-4">
+                                {/* Google Meet Link Row */}
+                                {formData.meetingLink && (
+                                    <div>
+                                        <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Video Link</label>
+                                        <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg border border-zinc-800">
+                                            <Video size={16} className="text-green-500"/>
+                                            <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">
+                                                {formData.meetingLink.replace('https://', '')}
+                                            </a>
+                                            <button onClick={() => copyText(formData.meetingLink)} className="text-zinc-400 hover:text-white"><Copy size={14}/></button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Filename Row */}
+                                {formData.pptName && (
+                                    <div>
+                                        <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Filename</label>
+                                        <div className="text-sm text-gray-300 font-medium truncate">{formData.pptName}</div>
+                                    </div>
+                                )}
+
+                                {/* File Type Badge */}
+                                {formData.pptUrl && (
+                                    <div>
+                                        <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Type</label>
+                                        <div className="inline-flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-xs text-white">
+                                            <FileType size={12}/> PDF
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
-                    )}
-                    {formData.polls && formData.polls.length > 0 && (
-                        <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                            <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
-                            <div className="space-y-3">{formData.polls.map((p, i) => (<div key={i} className="bg-black/30 p-3 rounded-lg border border-white/5"><p className="text-sm font-medium mb-1">{p.question}</p><div className="flex gap-2 text-xs text-gray-500">{p.options.map((opt, j) => (<span key={j} className="bg-zinc-800 px-2 py-1 rounded">{opt}</span>))}</div></div>))}</div>
-                        </div>
-                    )}
+
+                        {/* Polls */}
+                        {formData.polls && formData.polls.length > 0 && (
+                            <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
+                                <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
+                                <div className="space-y-3">{formData.polls.map((p, i) => (<div key={i} className="bg-black/30 p-3 rounded-lg border border-white/5"><p className="text-sm font-medium mb-1">{p.question}</p><div className="flex gap-2 text-xs text-gray-500">{p.options.map((opt, j) => (<span key={j} className="bg-zinc-800 px-2 py-1 rounded">{opt}</span>))}</div></div>))}</div>
+                            </div>
+                        )}
                     </div>
 
+                    {/* RIGHT COLUMN (AI Hub) */}
                     <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
                         <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
                             {['summary', 'transcript', 'upload'].map((tab) => (
