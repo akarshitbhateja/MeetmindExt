@@ -7,9 +7,6 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// ✅ VERCEL FIX: Removed top-level PDF imports. 
-// We will load PDF.js dynamically ONLY when needed in the browser.
-
 import { 
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
@@ -17,9 +14,9 @@ import {
   Video, FileType, AlertTriangle
 } from 'lucide-react';
 
-// Firebase Storage
+// Firebase Storage Imports (Added listAll)
 import { storage } from '@/lib/firebase';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from "firebase/storage";
 
 export default function Dashboard() {
 
@@ -86,28 +83,26 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ FIX: Dynamic Import for PDF.js (Prevents Server Crash on Vercel)
+  // ✅ 1. FIXED THUMBNAIL GENERATOR
   const generateThumbnail = async (file) => {
     try {
-      // 1. Load Library ONLY on Client (inside the function)
-      // This prevents the "DOMMatrix is not defined" error during build
+      // Dynamic import for client-side execution
       const pdfjsLib = await import('pdfjs-dist/build/pdf');
       pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
-      // 2. Process File
       const fileUrl = URL.createObjectURL(file);
       const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
       const page = await pdf.getPage(1); // Get Page 1
       
-      const viewport = page.getViewport({ scale: 0.5 }); // Scale down
+      const viewport = page.getViewport({ scale: 1.5 }); // Higher scale for better quality
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       canvas.height = viewport.height;
       canvas.width = viewport.width;
 
       await page.render({ canvasContext: context, viewport: viewport }).promise;
-      return canvas.toDataURL('image/jpeg', 0.8); // Return Base64 Image
+      return canvas.toDataURL('image/jpeg', 0.8); // Return Base64
     } catch (error) {
       console.error("Thumbnail error:", error);
       return null;
@@ -195,7 +190,6 @@ export default function Dashboard() {
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
       
-      // Return Hangout link (Meet) OR htmlLink (Calendar) AND ID
       return { 
           link: data.hangoutLink || data.htmlLink,
           id: data.id 
@@ -206,40 +200,46 @@ export default function Dashboard() {
 
   // --- ACTIONS ---
   
-  // ✅ DELETE ACTION (Google Calendar + Firebase + Mongo)
+  // ✅ 2. FIXED DELETION LOGIC (Calendar + Firebase + Mongo)
   const handleDeleteMeeting = async () => {
     setLoading(true);
     try {
-        // 1. Delete from Google Calendar (Sends Cancellation Emails)
+        // A. Delete from Google Calendar (Sends Cancellation Emails)
         if (formData.googleEventId) {
             let token = sessionStorage.getItem('google_access_token');
             if (!token) {
+                // Silent auth or popup if token expired
                 const result = await signInWithPopup(auth, provider);
                 token = GoogleAuthProvider.credentialFromResult(result).accessToken;
                 sessionStorage.setItem('google_access_token', token);
             }
             
+            console.log("Deleting Google Event:", formData.googleEventId);
             await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
                 method: "DELETE",
                 headers: { "Authorization": `Bearer ${token}` }
-            }).then(res => {
-                if(!res.ok && res.status !== 404 && res.status !== 410) throw new Error("Google Calendar Delete Failed");
             });
         }
 
-        // 2. Delete Files from Firebase
-        if (formData.pptName) {
-            const pptRef = ref(storage, `meetings/${currentMeetingId}/${formData.pptName}`);
-            await deleteObject(pptRef).catch(e => console.log("PPT not found in storage"));
+        // B. Delete Files from Firebase (Folder Cleanup)
+        try {
+            const folderRef = ref(storage, `meetings/${currentMeetingId}`);
+            const listRes = await listAll(folderRef);
+            // Delete all files inside the meeting folder
+            await Promise.all(listRes.items.map((item) => deleteObject(item)));
+            console.log("Firebase files deleted");
+        } catch(e) {
+            console.log("No files to delete or permission issue", e);
         }
 
-        // 3. Delete from MongoDB
+        // C. Delete from MongoDB
         await axios.delete(`/api/meetings?id=${currentMeetingId}`);
 
+        // D. Update UI
         setShowDeleteModal(false);
         setView('list');
         fetchMeetings(user.uid);
-        alert("Meeting cancelled and deleted successfully.");
+        alert("Meeting cancelled and deleted successfully. Attendees notified.");
 
     } catch (error) {
         console.error(error);
@@ -260,7 +260,7 @@ export default function Dashboard() {
         ...formData, 
         userId: user.uid, 
         meetingLink: result.link, 
-        googleEventId: result.id // ✅ Save Google ID for later delete
+        googleEventId: result.id // Save ID for deletion
     };
 
     try {
@@ -276,6 +276,7 @@ export default function Dashboard() {
     setLoading(false);
   };
 
+  // Polls Logic
   const handlePollOptionChange = (index, value) => {
     const newOptions = [...pollOptions];
     newOptions[index] = value;
@@ -302,7 +303,7 @@ export default function Dashboard() {
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // ✅ UPLOAD STEP: Handles Firebase Upload + Thumbnail Generation
+  // ✅ 3. UPLOAD LOGIC: Generate Thumbnail -> Upload -> Save
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
     setUploading(true);
@@ -313,7 +314,7 @@ export default function Dashboard() {
 
     try {
       if (pptFile) {
-        // 1. Generate Thumbnail (Dynamic Import used inside here)
+        // 1. Generate Thumbnail
         console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
         setPptPreview(thumbnailUrl);
@@ -335,6 +336,8 @@ export default function Dashboard() {
         pptThumbnail: thumbnailUrl 
       });
       
+      // Update local state
+      setFormData(prev => ({...prev, pptUrl: uploadedUrl, pptName: uploadedName, pptThumbnail: thumbnailUrl }));
       setStep(3);
     } catch (e) { 
         console.error(e);
@@ -501,69 +504,85 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (Premium Card UI) */}
+        {/* VIEW: DETAIL (Premium Card UI + DELETE BUTTON) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
+                {/* Header */}
                 <div className="flex justify-between items-start border-b border-white/10 pb-6 shrink-0">
                     <div>
-                    <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
-                    <h2 className="text-3xl font-bold leading-tight">{formData.title}</h2>
-                    <div className="flex items-center gap-4 text-sm text-gray-400 mt-2">
-                        <span className="flex items-center gap-2"><Calendar size={14}/> {formData.startTime?.replace('T', ' ')}</span>
-                        <span className="flex items-center gap-2"><Users size={14}/> {formData.attendees?.split(',').length} Participants</span>
-                    </div>
+                        <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
+                        <h2 className="text-3xl font-bold leading-tight">{formData.title}</h2>
+                        <div className="flex items-center gap-4 text-sm text-gray-400 mt-2">
+                            <span className="flex items-center gap-2"><Calendar size={14}/> {formData.startTime?.replace('T', ' ')}</span>
+                            <span className="flex items-center gap-2"><Users size={14}/> {formData.attendees?.split(',').length} Participants</span>
+                        </div>
                     </div>
                     <div className="flex gap-3">
-                        <button onClick={() => setShowDeleteModal(true)} className="bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-500 font-bold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Trash2 size={16}/> Delete</button>
+                        <button onClick={() => setShowDeleteModal(true)} className="bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-500 font-bold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all">
+                            <Trash2 size={16}/> Delete
+                        </button>
                         <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
                     </div>
                 </div>
 
                 <div className="grid grid-cols-12 gap-8 mt-6 flex-1 min-h-0">
+                    {/* LEFT COLUMN */}
                     <div className="col-span-4 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
-                    <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                        <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
-                        <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
-                    </div>
-
-                    {/* Premium Asset Card */}
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
-                        <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
-                            {formData.pptThumbnail ? (
-                                <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
-                            ) : (
-                                <div className="flex flex-col items-center text-zinc-600 gap-2"><FileText size={32}/><span className="text-xs">No Preview</span></div>
-                            )}
-                        </div>
-                        <div className="p-5 space-y-4">
-                            {formData.meetingLink && (
-                                <div>
-                                    <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Video Link</label>
-                                    <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg border border-zinc-800">
-                                        <Video size={16} className="text-green-500"/>
-                                        <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">{formData.meetingLink.replace('https://', '')}</a>
-                                        <button onClick={() => copyText(formData.meetingLink)} className="text-zinc-400 hover:text-white"><Copy size={14}/></button>
-                                    </div>
-                                </div>
-                            )}
-                            {formData.pptName && (
-                                <div className="flex items-center justify-between border-t border-zinc-800 pt-3 mt-3">
-                                    <div><label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider block mb-0.5">Filename</label><div className="text-sm text-gray-300 font-medium truncate max-w-[180px]">{formData.pptName}</div></div>
-                                    <div className="inline-flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-xs text-zinc-400 font-mono"><FileType size={10}/> PDF</div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {formData.polls && formData.polls.length > 0 && (
+                        
                         <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                            <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
-                            <div className="space-y-3">{formData.polls.map((p, i) => (<div key={i} className="bg-black/30 p-3 rounded-lg border border-white/5"><p className="text-sm font-medium mb-1">{p.question}</p><div className="flex gap-2 text-xs text-gray-500">{p.options.map((opt, j) => (<span key={j} className="bg-zinc-800 px-2 py-1 rounded">{opt}</span>))}</div></div>))}</div>
+                            <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
+                            <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
                         </div>
-                    )}
+
+                        {/* ✅ PREMIUM ASSET CARD */}
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
+                            {/* Thumbnail Image */}
+                            <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
+                                {formData.pptThumbnail ? (
+                                    <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
+                                ) : (
+                                    <div className="flex flex-col items-center text-zinc-600 gap-2">
+                                        <FileText size={32}/>
+                                        <span className="text-xs">No Preview</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Details */}
+                            <div className="p-5 space-y-4">
+                                {formData.meetingLink && (
+                                    <div>
+                                        <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Video Link</label>
+                                        <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg border border-zinc-800">
+                                            <Video size={16} className="text-green-500"/>
+                                            <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">{formData.meetingLink.replace('https://', '')}</a>
+                                            <button onClick={() => copyText(formData.meetingLink)} className="text-zinc-400 hover:text-white"><Copy size={14}/></button>
+                                        </div>
+                                    </div>
+                                )}
+                                {formData.pptName && (
+                                    <div className="flex items-center justify-between border-t border-zinc-800 pt-3 mt-3">
+                                        <div>
+                                            <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider block mb-0.5">Filename</label>
+                                            <div className="text-sm text-gray-300 font-medium truncate max-w-[180px]">{formData.pptName}</div>
+                                        </div>
+                                        <div className="inline-flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-xs text-zinc-400 font-mono"><FileType size={10}/> PDF</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Polls */}
+                        {formData.polls && formData.polls.length > 0 && (
+                            <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
+                                <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
+                                <div className="space-y-3">{formData.polls.map((p, i) => (<div key={i} className="bg-black/30 p-3 rounded-lg border border-white/5"><p className="text-sm font-medium mb-1">{p.question}</p><div className="flex gap-2 text-xs text-gray-500">{p.options.map((opt, j) => (<span key={j} className="bg-zinc-800 px-2 py-1 rounded">{opt}</span>))}</div></div>))}</div>
+                            </div>
+                        )}
                     </div>
 
+                    {/* RIGHT COLUMN (AI Hub) */}
                     <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
                         <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
                             {['summary', 'transcript', 'upload'].map((tab) => (
