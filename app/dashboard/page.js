@@ -7,14 +7,17 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 
+// ✅ FIX 1: Robust PDF Worker Setup (HTTPS)
+import * as pdfjsLib from 'pdfjs-dist/build/pdf';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
 import { 
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
   PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2,
-  Video, FileType, AlertTriangle // Added AlertTriangle
+  Video, FileType, AlertTriangle
 } from 'lucide-react';
 
-// Firebase Storage
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
@@ -30,7 +33,8 @@ export default function Dashboard() {
   // Wizard & Meeting Data
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
-    title: '', startTime: '', endTime: '', description: '', attendees: '', pptUrl: '', pptName: '', pptThumbnail: '', polls: []
+    title: '', startTime: '', endTime: '', description: '', attendees: '', 
+    pptUrl: '', pptName: '', pptThumbnail: '', googleEventId: '', polls: []
   });
   const [currentMeetingId, setCurrentMeetingId] = useState(null);
 
@@ -49,7 +53,7 @@ export default function Dashboard() {
 
   // Modals
   const [showShareModal, setShowShareModal] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(false); // ✅ New Delete Modal
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [shareOptions, setShareOptions] = useState({ video: true, notes: true, ppt: true });
 
   const router = useRouter();
@@ -82,26 +86,23 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ THUMBNAIL GENERATOR (Client Side Only)
+  // ✅ FIX: Robust Thumbnail Generation
   const generateThumbnail = async (file) => {
     try {
-      // Dynamic import to prevent Vercel Server Error
-      const pdfjsLib = await import('pdfjs-dist/build/pdf');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
+      // Use the global worker set at the top
       const fileUrl = URL.createObjectURL(file);
       const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1); // Render 1st Page
+      const page = await pdf.getPage(1); // Page 1
       
-      const viewport = page.getViewport({ scale: 0.5 }); // Scale down for thumbnail
+      const viewport = page.getViewport({ scale: 1.0 }); // Better resolution
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       canvas.height = viewport.height;
       canvas.width = viewport.width;
 
       await page.render({ canvasContext: context, viewport: viewport }).promise;
-      return canvas.toDataURL('image/jpeg', 0.8); // Return Base64
+      return canvas.toDataURL('image/jpeg', 0.9);
     } catch (error) {
       console.error("Thumbnail error:", error);
       return null;
@@ -148,12 +149,11 @@ export default function Dashboard() {
 
   const filteredTranscript = useMemo(() => {
     if (!transcriptSearch) return transcription;
-    return transcription.split('\n').filter(line => 
-      line.toLowerCase().includes(transcriptSearch.toLowerCase())
-    ).join('\n___\n');
+    return transcription.split('\n').filter(line => line.toLowerCase().includes(transcriptSearch.toLowerCase())).join('\n___\n');
   }, [transcriptSearch, transcription]);
 
   // --- GOOGLE CALENDAR ---
+  
   const createGoogleCalendarEvent = async (meetingData) => {
     let token = sessionStorage.getItem('google_access_token');
     if (!token) {
@@ -164,38 +164,98 @@ export default function Dashboard() {
         sessionStorage.setItem('google_access_token', token);
       } catch (e) { alert("Calendar access required."); return null; }
     }
+
     const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const event = {
       summary: meetingData.title,
-      description: `${meetingData.description}\n\n--\nScheduled via MeetMind`,
+      description: `${meetingData.description}\n\n--\nScheduled via MeetMind Copilot`,
       start: { dateTime: meetingData.startTime + ":00", timeZone: userTimeZone },
       end: { dateTime: meetingData.endTime + ":00", timeZone: userTimeZone },
       attendees: meetingData.attendees.split(',').map(email => ({ email: email.trim() })),
       reminders: { useDefault: false, overrides: [{ method: 'email', minutes: 30 }, { method: 'popup', minutes: 10 }] },
       conferenceData: { createRequest: { requestId: Math.random().toString(36).substring(7) } }
     };
+
     try {
       const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all`, {
         method: "POST", headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(event)
       });
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
-      return data.hangoutLink || data.htmlLink;
+      
+      // ✅ FIX: Return BOTH Link and Event ID (Needed for delete)
+      return { 
+          link: data.hangoutLink || data.htmlLink,
+          id: data.id 
+      };
+
     } catch (error) { alert("Schedule failed: " + error.message); return null; }
   };
 
   // --- ACTIONS ---
-  const handleNextStep1 = async () => {
-    if (!formData.title || !formData.startTime || !formData.endTime) { alert("Required fields missing."); return; }
+  
+  // ✅ DELETE ACTION (Google Calendar + Firebase + Mongo)
+  const handleDeleteMeeting = async () => {
     setLoading(true);
-    const calendarLink = await createGoogleCalendarEvent(formData);
-    if (!calendarLink) { setLoading(false); return; }
-
-    const meetingData = { ...formData, userId: user.uid, meetingLink: calendarLink };
     try {
-      let res;
+        // 1. Delete from Google Calendar (Sends Cancellation Emails)
+        if (formData.googleEventId) {
+            let token = sessionStorage.getItem('google_access_token');
+            // If token missing, try getting it silently or ask user
+            if (!token) {
+                const result = await signInWithPopup(auth, provider);
+                token = GoogleAuthProvider.credentialFromResult(result).accessToken;
+                sessionStorage.setItem('google_access_token', token);
+            }
+            
+            await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
+                method: "DELETE",
+                headers: { "Authorization": `Bearer ${token}` }
+            }).then(res => {
+                if(!res.ok && res.status !== 404 && res.status !== 410) throw new Error("Google Calendar Delete Failed");
+            });
+            console.log("Deleted from Google Calendar");
+        }
+
+        // 2. Delete Files from Firebase
+        if (formData.pptName) {
+            const pptRef = ref(storage, `meetings/${currentMeetingId}/${formData.pptName}`);
+            await deleteObject(pptRef).catch(e => console.log("PPT not found in storage"));
+        }
+
+        // 3. Delete from MongoDB
+        await axios.delete(`/api/meetings?id=${currentMeetingId}`);
+
+        setShowDeleteModal(false);
+        setView('list');
+        fetchMeetings(user.uid);
+        alert("Meeting cancelled and deleted successfully.");
+
+    } catch (error) {
+        console.error(error);
+        alert("Delete error: " + error.message);
+    }
+    setLoading(false);
+  };
+
+  const handleNextStep1 = async () => {
+    if (!formData.title || !formData.startTime || !formData.endTime) return alert("Fill all details.");
+    if (new Date(formData.startTime) >= new Date(formData.endTime)) return alert("End time must be after start time.");
+    
+    setLoading(true);
+    const result = await createGoogleCalendarEvent(formData); // Now returns Object
+    if (!result) { setLoading(false); return; }
+
+    const meetingData = { 
+        ...formData, 
+        userId: user.uid, 
+        meetingLink: result.link, 
+        googleEventId: result.id // ✅ Save Google ID for later delete
+    };
+
+    try {
       if (!currentMeetingId) {
-        res = await axios.post('/api/meetings', meetingData);
+        const res = await axios.post('/api/meetings', meetingData);
         setCurrentMeetingId(res.data.data._id);
       } else {
         await axios.put('/api/meetings', { id: currentMeetingId, ...meetingData });
@@ -205,12 +265,17 @@ export default function Dashboard() {
     setLoading(false);
   };
 
+  // Polls Logic
   const handlePollOptionChange = (index, value) => {
     const newOptions = [...pollOptions];
     newOptions[index] = value;
     setPollOptions(newOptions);
   };
-  const addPollOptionField = () => setPollOptions([...pollOptions, '']);
+
+  const addPollOptionField = () => {
+    setPollOptions([...pollOptions, '']);
+  };
+
   const savePollToLocal = () => {
     if (!pollQuestion.trim()) return alert("Enter question");
     const validOptions = pollOptions.filter(opt => opt.trim() !== "");
@@ -219,13 +284,14 @@ export default function Dashboard() {
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
     setPollQuestion(''); setPollOptions(['', '']);
   };
+
   const deletePoll = (index) => {
     const newPolls = [...formData.polls];
     newPolls.splice(index, 1);
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // ✅ UPLOAD: Generate Thumbnail -> Upload to Firebase -> Save to Mongo
+  // Upload Logic with Thumbnail
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
     setUploading(true);
@@ -236,12 +302,10 @@ export default function Dashboard() {
 
     try {
       if (pptFile) {
-        // 1. Generate Thumbnail
         console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
         setPptPreview(thumbnailUrl);
 
-        // 2. Upload PDF to Firebase Storage
         console.log("Uploading file...");
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
         const snapshot = await uploadBytes(fileRef, pptFile);
@@ -257,7 +321,7 @@ export default function Dashboard() {
         pptThumbnail: thumbnailUrl 
       });
       
-      // Update local state
+      // Update local state immediately for UI
       setFormData(prev => ({...prev, pptUrl: uploadedUrl, pptName: uploadedName, pptThumbnail: thumbnailUrl }));
       setStep(3);
     } catch (e) { alert("Upload failed: " + e.message); }
@@ -278,9 +342,7 @@ export default function Dashboard() {
       sumData.append("text", transRes.data.text);
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      const rawSummary = sumRes.data.summary; 
-      const displaySummary = cleanSummaryForDisplay(rawSummary);
-
+      const displaySummary = cleanSummaryForDisplay(sumRes.data.summary);
       setTranscription(transRes.data.text);
       setSummary(displaySummary);
 
@@ -301,43 +363,6 @@ export default function Dashboard() {
     setShowShareModal(false); setView('list'); setStep(1); fetchMeetings(user.uid);
   };
 
-  // ✅ DELETE MEETING LOGIC
-  const handleDeleteMeeting = async () => {
-    setLoading(true);
-    try {
-        // 1. Delete Files from Firebase (Best Effort)
-        if (formData.pptName) {
-            const pptRef = ref(storage, `meetings/${currentMeetingId}/${formData.pptName}`);
-            await deleteObject(pptRef).catch(e => console.log("PPT delete failed (might not exist):", e));
-        }
-        
-        // 2. Trigger Pabbly Cancellation Webhook (Send Emails)
-        // (You need to create this webhook in Pabbly and add it to .env.local)
-        if (process.env.NEXT_PUBLIC_PABBLY_CANCEL_WEBHOOK) {
-            await axios.post(process.env.NEXT_PUBLIC_PABBLY_CANCEL_WEBHOOK, {
-                title: formData.title,
-                attendees: formData.attendees,
-                reason: "Meeting deleted by host."
-            });
-        }
-
-        // 3. Delete from MongoDB
-        await axios.delete(`/api/meetings?id=${currentMeetingId}`);
-
-        // 4. Reset UI
-        setShowDeleteModal(false);
-        setView('list');
-        fetchMeetings(user.uid);
-        alert("Meeting deleted permanently.");
-
-    } catch (error) {
-        console.error(error);
-        alert("Delete failed: " + error.message);
-    }
-    setLoading(false);
-  };
-
-
   if (!user) return <div className="bg-black h-screen flex items-center justify-center text-white">Loading...</div>;
 
   return (
@@ -357,10 +382,10 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      {/* MAIN CONTENT AREA */}
+      {/* MAIN CONTENT */}
       <main className="flex-1 relative overflow-hidden">
         
-        {/* VIEW: LIST */}
+        {/* LIST VIEW */}
         {view === 'list' && (
           <div className="absolute inset-0 overflow-y-auto p-8 custom-scrollbar">
             <div className="max-w-7xl mx-auto w-full">
@@ -392,7 +417,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* VIEW: CREATE WIZARD (Standard) */}
+        {/* WIZARD VIEW */}
         {view === 'create' && (
            <div className="absolute inset-0 overflow-y-auto p-8 w-full flex flex-col items-center custom-scrollbar">
              <div className="w-full max-w-3xl">
@@ -459,86 +484,68 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (Premium Card UI + DELETE BUTTON) */}
+        {/* VIEW: DETAIL */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
-                {/* Header */}
                 <div className="flex justify-between items-start border-b border-white/10 pb-6 shrink-0">
                     <div>
-                        <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
-                        <h2 className="text-3xl font-bold leading-tight">{formData.title}</h2>
-                        <div className="flex items-center gap-4 text-sm text-gray-400 mt-2">
-                            <span className="flex items-center gap-2"><Calendar size={14}/> {formData.startTime?.replace('T', ' ')}</span>
-                            <span className="flex items-center gap-2"><Users size={14}/> {formData.attendees?.split(',').length} Participants</span>
-                        </div>
+                    <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
+                    <h2 className="text-3xl font-bold leading-tight">{formData.title}</h2>
+                    <div className="flex items-center gap-4 text-sm text-gray-400 mt-2">
+                        <span className="flex items-center gap-2"><Calendar size={14}/> {formData.startTime?.replace('T', ' ')}</span>
+                        <span className="flex items-center gap-2"><Users size={14}/> {formData.attendees?.split(',').length} Participants</span>
+                    </div>
                     </div>
                     <div className="flex gap-3">
-                        {/* ✅ DELETE BUTTON */}
-                        <button onClick={() => setShowDeleteModal(true)} className="bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-500 font-bold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all">
-                            <Trash2 size={16}/> Delete
-                        </button>
+                        <button onClick={() => setShowDeleteModal(true)} className="bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-500 font-bold px-4 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Trash2 size={16}/> Delete</button>
                         <button onClick={() => setShowShareModal(true)} className="bg-green-600 hover:bg-green-500 text-black font-bold px-6 py-2 rounded-lg text-sm flex items-center gap-2 transition-all"><Share2 size={16}/> Share</button>
                     </div>
                 </div>
 
                 <div className="grid grid-cols-12 gap-8 mt-6 flex-1 min-h-0">
-                    {/* LEFT COLUMN */}
                     <div className="col-span-4 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
-                        
-                        <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                            <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
-                            <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
-                        </div>
-
-                        {/* ✅ PREMIUM ASSET CARD */}
-                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
-                            {/* Thumbnail Image */}
-                            <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
-                                {formData.pptThumbnail ? (
-                                    <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
-                                ) : (
-                                    <div className="flex flex-col items-center text-zinc-600 gap-2">
-                                        <FileText size={32}/>
-                                        <span className="text-xs">No Preview</span>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Details */}
-                            <div className="p-5 space-y-4">
-                                {formData.meetingLink && (
-                                    <div>
-                                        <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Video Link</label>
-                                        <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg border border-zinc-800">
-                                            <Video size={16} className="text-green-500"/>
-                                            <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">{formData.meetingLink.replace('https://', '')}</a>
-                                            <button onClick={() => copyText(formData.meetingLink)} className="text-zinc-400 hover:text-white"><Copy size={14}/></button>
-                                        </div>
-                                    </div>
-                                )}
-                                {formData.pptName && (
-                                    <div className="flex items-center justify-between border-t border-zinc-800 pt-3 mt-3">
-                                        <div>
-                                            <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider block mb-0.5">Filename</label>
-                                            <div className="text-sm text-gray-300 font-medium truncate max-w-[180px]">{formData.pptName}</div>
-                                        </div>
-                                        <div className="inline-flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-xs text-zinc-400 font-mono"><FileType size={10}/> PDF</div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Polls */}
-                        {formData.polls && formData.polls.length > 0 && (
-                            <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
-                                <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
-                                <div className="space-y-3">{formData.polls.map((p, i) => (<div key={i} className="bg-black/30 p-3 rounded-lg border border-white/5"><p className="text-sm font-medium mb-1">{p.question}</p><div className="flex gap-2 text-xs text-gray-500">{p.options.map((opt, j) => (<span key={j} className="bg-zinc-800 px-2 py-1 rounded">{opt}</span>))}</div></div>))}</div>
-                            </div>
-                        )}
+                    <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
+                        <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
+                        <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
                     </div>
 
-                    {/* RIGHT COLUMN */}
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
+                        <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
+                            {formData.pptThumbnail ? (
+                                <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
+                            ) : (
+                                <div className="flex flex-col items-center text-zinc-600 gap-2"><FileText size={32}/><span className="text-xs">No Preview</span></div>
+                            )}
+                        </div>
+                        <div className="p-5 space-y-4">
+                            {formData.meetingLink && (
+                                <div>
+                                    <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Video Link</label>
+                                    <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg border border-zinc-800">
+                                        <Video size={16} className="text-green-500"/>
+                                        <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">{formData.meetingLink.replace('https://', '')}</a>
+                                        <button onClick={() => copyText(formData.meetingLink)} className="text-zinc-400 hover:text-white"><Copy size={14}/></button>
+                                    </div>
+                                </div>
+                            )}
+                            {formData.pptName && (
+                                <div className="flex items-center justify-between border-t border-zinc-800 pt-3 mt-3">
+                                    <div><label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider block mb-0.5">Filename</label><div className="text-sm text-gray-300 font-medium truncate max-w-[180px]">{formData.pptName}</div></div>
+                                    <div className="inline-flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-xs text-zinc-400 font-mono"><FileType size={10}/> PDF</div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {formData.polls && formData.polls.length > 0 && (
+                        <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
+                            <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
+                            <div className="space-y-3">{formData.polls.map((p, i) => (<div key={i} className="bg-black/30 p-3 rounded-lg border border-white/5"><p className="text-sm font-medium mb-1">{p.question}</p><div className="flex gap-2 text-xs text-gray-500">{p.options.map((opt, j) => (<span key={j} className="bg-zinc-800 px-2 py-1 rounded">{opt}</span>))}</div></div>))}</div>
+                        </div>
+                    )}
+                    </div>
+
                     <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
                         <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
                             {['summary', 'transcript', 'upload'].map((tab) => (
@@ -628,24 +635,12 @@ export default function Dashboard() {
               </div>
               <h3 className="text-2xl font-bold mb-2 text-white">Permanently Delete?</h3>
               <p className="text-zinc-400 text-sm mb-8 leading-relaxed">
-                This action cannot be undone. This will delete the meeting record, all uploaded files (PPT/Audio), and trigger a cancellation email to all attendees.
+                This action cannot be undone. This will delete the meeting record, all uploaded files, and trigger a cancellation email to all attendees via Google Calendar.
               </p>
               
               <div className="flex gap-3">
-                <button 
-                    onClick={() => setShowDeleteModal(false)} 
-                    className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-white font-semibold py-3 rounded-xl transition"
-                >
-                    Cancel
-                </button>
-                <button 
-                    onClick={handleDeleteMeeting} 
-                    disabled={loading}
-                    className="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-xl transition flex items-center justify-center gap-2"
-                >
-                    {loading ? <span className="animate-spin">⏳</span> : <Trash2 size={18}/>}
-                    Delete
-                </button>
+                <button onClick={() => setShowDeleteModal(false)} className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-white font-semibold py-3 rounded-xl transition">Cancel</button>
+                <button onClick={handleDeleteMeeting} disabled={loading} className="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-xl transition flex items-center justify-center gap-2">{loading ? <span className="animate-spin">⏳</span> : <Trash2 size={18}/>} Delete</button>
               </div>
             </div>
           </motion.div>
