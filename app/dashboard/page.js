@@ -6,16 +6,16 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import Script from 'next/script'; // ✅ NEW: To load PDF Lib safely
+import Script from 'next/script'; // ✅ Loads PDF Lib safely in browser
 
 import { 
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
   PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2,
-  Video, FileType, AlertTriangle, Eye, Edit2
+  Video, FileType, AlertTriangle, Eye, Edit2, RefreshCw
 } from 'lucide-react';
 
-// Firebase Storage Imports
+// Firebase Storage
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from "firebase/storage";
 
@@ -27,6 +27,7 @@ export default function Dashboard() {
   const [view, setView] = useState('list'); 
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [driveFiles, setDriveFiles] = useState([]);
 
   // Wizard & Meeting Data
   const [step, setStep] = useState(1);
@@ -80,6 +81,7 @@ export default function Dashboard() {
   };
 
   const handleSignOut = async () => {
+    localStorage.removeItem('google_access_token');
     sessionStorage.removeItem('google_access_token');
     await signOut(auth);
     router.push('/login');
@@ -87,12 +89,15 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ 1. NEW THUMBNAIL LOGIC (Uses window.pdfjsLib from Script Tag)
+  // ✅ 1. ROBUST THUMBNAIL GENERATOR (Uses global window.pdfjsLib)
   const generateThumbnail = async (file) => {
+    if (typeof window === "undefined") return null;
+
     try {
       // Ensure Library is Loaded
       if (!window.pdfjsLib) {
-        console.error("PDF Lib not loaded yet. Waiting...");
+        console.warn("PDF Lib not ready yet. Waiting...");
+        // Simple retry logic could go here, but usually script loads fast
         return null;
       }
 
@@ -176,13 +181,13 @@ export default function Dashboard() {
 
   // --- GOOGLE CALENDAR ---
   const createGoogleCalendarEvent = async (meetingData) => {
-    let token = sessionStorage.getItem('google_access_token');
+    let token = localStorage.getItem('google_access_token');
     if (!token) {
       try {
         const result = await signInWithPopup(auth, provider);
         const credential = GoogleAuthProvider.credentialFromResult(result);
         token = credential.accessToken;
-        sessionStorage.setItem('google_access_token', token);
+        localStorage.setItem('google_access_token', token);
       } catch (e) { alert("Calendar access required."); return null; }
     }
 
@@ -213,35 +218,91 @@ export default function Dashboard() {
     } catch (error) { alert("Schedule failed: " + error.message); return null; }
   };
 
+  // --- GOOGLE DRIVE ---
+  const checkDriveForRecordings = async () => {
+    let token = localStorage.getItem('google_access_token');
+    if (!token) return alert("Please sign out and sign in again to enable Drive access.");
+
+    setUploading(true);
+    try {
+        // Search for MP4 files created AFTER meeting start
+        const meetingStart = new Date(formData.startTime).toISOString();
+        const query = `mimeType contains 'video/mp4' and createdTime > '${meetingStart}' and trashed = false`;
+
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name, createdTime, webViewLink, size)&key=${process.env.NEXT_PUBLIC_FIREBASE_API_KEY}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        const data = await res.json();
+        if (data.files && data.files.length > 0) {
+            setDriveFiles(data.files);
+        } else {
+            alert("No new recordings found in Drive.");
+        }
+    } catch (e) { console.error(e); alert("Drive Error: " + e.message); }
+    setUploading(false);
+  };
+
+  const processDriveFile = async (fileId, fileName) => {
+    let token = localStorage.getItem('google_access_token');
+    setLoading(true);
+    try {
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const blob = await res.blob();
+        const file = new File([blob], fileName, { type: 'audio/mp4' });
+        
+        // Pass to existing Audio Processor
+        setAudioFile(file); // Set state
+        
+        // Directly invoke processing manually since state update is async
+        const data = new FormData();
+        data.append("file", file);
+        data.append("task", "transcribe");
+        
+        const transRes = await axios.post('/api/groq/process', data);
+        const text = transRes.data.text;
+        
+        const sumData = new FormData();
+        sumData.append("task", "summarize");
+        sumData.append("text", text);
+        const sumRes = await axios.post('/api/groq/process', sumData);
+        
+        const displaySummary = cleanSummaryForDisplay(sumRes.data.summary);
+        setTranscription(text);
+        setSummary(displaySummary);
+        
+        await axios.put('/api/meetings', { 
+            id: currentMeetingId, transcription: text, summary: displaySummary, status: 'completed'
+        });
+        
+        setActiveTab('summary');
+        setDriveFiles([]);
+
+    } catch (e) { console.error(e); alert("Processing Failed: " + e.message); }
+    setLoading(false);
+  };
+
   // --- ACTIONS ---
   
-  // ✅ DELETE ACTION
+  // ✅ 2. DELETE ACTION
   const handleDeleteMeeting = async () => {
     setLoading(true);
     try {
         // A. Delete from Google Calendar
         if (formData.googleEventId) {
-            let token = sessionStorage.getItem('google_access_token');
+            let token = localStorage.getItem('google_access_token');
             if (!token) {
-                try {
-                    const result = await signInWithPopup(auth, provider);
-                    token = GoogleAuthProvider.credentialFromResult(result).accessToken;
-                    sessionStorage.setItem('google_access_token', token);
-                } catch(e) {
-                    console.log("Could not refresh token for calendar delete");
-                }
+                const result = await signInWithPopup(auth, provider);
+                token = GoogleAuthProvider.credentialFromResult(result).accessToken;
+                localStorage.setItem('google_access_token', token);
             }
             
-            if (token) {
-                console.log("Deleting Google Event:", formData.googleEventId);
-                const calRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
-                    method: "DELETE",
-                    headers: { "Authorization": `Bearer ${token}` }
-                });
-                if (!calRes.ok && calRes.status !== 410) { 
-                     console.warn("Calendar delete status:", calRes.status);
-                }
-            }
+            await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
+                method: "DELETE",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
         }
 
         // B. Delete Files from Firebase
@@ -249,7 +310,7 @@ export default function Dashboard() {
             try {
                 const pptRef = ref(storage, `meetings/${currentMeetingId}/${formData.pptName}`);
                 await deleteObject(pptRef);
-            } catch(e) { console.log("PPT file not found or already deleted"); }
+            } catch(e) { console.log("PPT file not found"); }
         }
 
         // C. Delete from MongoDB
@@ -258,7 +319,7 @@ export default function Dashboard() {
         setShowDeleteModal(false);
         setView('list');
         fetchMeetings(user.uid);
-        alert("Meeting cancelled and deleted successfully. Attendees notified.");
+        alert("Meeting deleted & cancelled.");
 
     } catch (error) {
         console.error(error);
@@ -295,27 +356,21 @@ export default function Dashboard() {
     setLoading(false);
   };
 
-  // Polls Logic
+  // Polls
   const handlePollOptionChange = (index, value) => {
     const newOptions = [...pollOptions];
     newOptions[index] = value;
     setPollOptions(newOptions);
   };
-
-  const addPollOptionField = () => {
-    setPollOptions([...pollOptions, '']);
-  };
-
+  const addPollOptionField = () => setPollOptions([...pollOptions, '']);
   const savePollToLocal = () => {
     if (!pollQuestion.trim()) return alert("Enter question");
     const validOptions = pollOptions.filter(opt => opt.trim() !== "");
     if (validOptions.length < 2) return alert("Need 2+ options");
-
     const newPoll = { question: pollQuestion, options: validOptions };
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
     setPollQuestion(''); setPollOptions(['', '']);
   };
-
   const deletePoll = (index) => {
     const newPolls = [...formData.polls];
     newPolls.splice(index, 1);
@@ -333,12 +388,10 @@ export default function Dashboard() {
 
     try {
       if (pptFile) {
-        // 1. Generate Thumbnail
         console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
         if (thumbnailUrl) setPptPreview(thumbnailUrl);
 
-        // 2. Upload PDF to Firebase Storage
         console.log("Uploading file...");
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
         const snapshot = await uploadBytes(fileRef, pptFile);
@@ -360,31 +413,28 @@ export default function Dashboard() {
     setUploading(false);
   };
 
-  // ✅ NEW: REPLACE PPT FUNCTION
+  // ✅ 4. REPLACE PPT LOGIC (Inside Detail View)
   const handleReplacePPT = async (e) => {
     const file = e.target.files[0];
     if (!file || !currentMeetingId) return;
     
     setUploading(true);
-    
     try {
-        console.log("Replacing PPT...");
-
-        // 1. Delete Old File (Cleanup)
+        // Delete Old
         if (formData.pptName) {
             const oldRef = ref(storage, `meetings/${currentMeetingId}/${formData.pptName}`);
-            await deleteObject(oldRef).catch(() => console.log("Old file not found"));
+            await deleteObject(oldRef).catch(() => {});
         }
 
-        // 2. Generate New Thumbnail
+        // New Thumbnail
         const thumbnailUrl = await generateThumbnail(file);
         
-        // 3. Upload New File
+        // Upload New
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${file.name}`);
         await uploadBytes(fileRef, file);
         const uploadedUrl = await getDownloadURL(fileRef);
 
-        // 4. Update MongoDB
+        // Update DB
         await axios.put('/api/meetings', {
             id: currentMeetingId,
             pptUrl: uploadedUrl,
@@ -392,7 +442,7 @@ export default function Dashboard() {
             pptThumbnail: thumbnailUrl
         });
 
-        // 5. Update Local State (Immediate UI Feedback)
+        // Update UI
         setFormData(prev => ({
             ...prev,
             pptUrl: uploadedUrl,
@@ -400,14 +450,12 @@ export default function Dashboard() {
             pptThumbnail: thumbnailUrl
         }));
         
-        alert("Presentation updated successfully!");
+        alert("PPT Replaced!");
 
-    } catch (error) {
-        console.error("Replace failed:", error);
-        alert("Failed to replace PPT.");
-    }
+    } catch (error) { console.error(error); alert("Replace failed"); }
     setUploading(false);
   };
+
 
   const handleProcessAudio = async () => {
     if (!audioFile) return alert("Upload audio first.");
@@ -449,7 +497,7 @@ export default function Dashboard() {
   return (
     <div className="h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col overflow-hidden">
       
-      {/* ✅ LOAD PDF LIB GLOBALLY */}
+      {/* ✅ LOAD PDF LIB */}
       <Script 
         src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" 
         strategy="lazyOnload"
@@ -580,7 +628,7 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (Premium Asset Card) */}
+        {/* VIEW: DETAIL (Premium Asset Card + Edit/Preview Buttons) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
@@ -625,7 +673,8 @@ export default function Dashboard() {
                                     </div>
                                 ) : formData.pptThumbnail ? (
                                     <>
-                                        <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
+                                        {/* ✅ FULL IMAGE FIT FIX */}
+                                        <img src={formData.pptThumbnail} className="h-full w-full object-contain bg-black" alt="Slide Preview" />
                                         {/* Buttons Overlay */}
                                         <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                                             <button 
@@ -648,7 +697,6 @@ export default function Dashboard() {
                                     <div className="flex flex-col items-center text-zinc-600 gap-2">
                                         <FileText size={32}/>
                                         <span className="text-xs">No Preview</span>
-                                        {/* Upload button if empty */}
                                         <button onClick={() => replaceFileRef.current.click()} className="mt-2 text-xs bg-zinc-800 px-3 py-1 rounded border border-zinc-700 hover:text-white">Upload PPT</button>
                                     </div>
                                 )}
@@ -720,11 +768,28 @@ export default function Dashboard() {
                             {activeTab === 'upload' && (
                                 <div className="flex flex-col items-center justify-center h-full space-y-6 animate-in fade-in">
                                 {!summary ? (
-                                    <div className="w-full max-w-md border-2 border-dashed border-zinc-700 bg-black/20 rounded-xl p-8 flex flex-col items-center text-center">
-                                    <div className="w-16 h-16 bg-zinc-800 rounded-full flex items-center justify-center mb-4"><Upload size={24} className="text-green-500"/></div>
-                                    <h4 className="font-semibold mb-2">Upload Meeting Recording</h4>
-                                    <input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-600 file:text-black hover:file:bg-green-500 mb-4"/>
-                                    <button onClick={handleProcessAudio} disabled={loading} className="w-full bg-white text-black font-bold py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-gray-200 disabled:opacity-50">{loading ? <span className="animate-spin">⏳</span> : <PlayCircle size={18}/>} {loading ? 'Processing...' : 'Generate Insights'}</button>
+                                    <div className="w-full max-w-md bg-zinc-900 border border-zinc-700 rounded-xl p-6 flex flex-col gap-4">
+                                        <div className="border-2 border-dashed border-zinc-700 bg-black/20 rounded-lg p-6 flex flex-col items-center text-center">
+                                            <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center mb-3"><Upload size={20} className="text-green-500"/></div>
+                                            <h4 className="font-semibold text-sm mb-2">Upload File</h4>
+                                            <input type="file" accept="audio/*,video/*" onChange={e => setAudioFile(e.target.files[0])} className="w-full text-xs text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-green-600 file:text-black hover:file:bg-green-500 mb-3"/>
+                                            <button onClick={handleProcessAudio} disabled={loading} className="w-full bg-white text-black font-bold py-2 rounded-lg text-sm flex items-center justify-center gap-2 hover:bg-gray-200 disabled:opacity-50">{loading ? <span className="animate-spin">⏳</span> : <PlayCircle size={16}/>} Generate Insights</button>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-xs text-gray-500"><div className="h-px bg-zinc-700 flex-1"></div>OR<div className="h-px bg-zinc-700 flex-1"></div></div>
+                                        <button onClick={checkDriveForRecordings} disabled={uploading} className="w-full bg-blue-600/10 border border-blue-600/30 text-blue-500 hover:bg-blue-600/20 font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition">
+                                            {uploading ? <span className="animate-spin">⏳</span> : <Video size={18}/>} Check Drive for Recordings
+                                        </button>
+                                        {driveFiles.length > 0 && (
+                                            <div className="mt-2 space-y-2 max-h-40 overflow-y-auto custom-scrollbar border-t border-zinc-800 pt-2">
+                                                <p className="text-xs text-gray-400 mb-2">Found {driveFiles.length} recordings:</p>
+                                                {driveFiles.map(f => (
+                                                    <div key={f.id} className="flex items-center justify-between p-2 bg-black/40 rounded border border-zinc-800">
+                                                        <div className="truncate text-xs text-white max-w-[180px]">{f.name}</div>
+                                                        <button onClick={() => processDriveFile(f.id, f.name)} className="text-xs bg-green-600 text-black px-2 py-1 rounded font-bold hover:bg-green-500">Process</button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                 ) : (
                                     <div className="text-center space-y-4">
