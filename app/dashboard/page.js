@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react'; // Added useRef
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { auth, provider, signInWithPopup, GoogleAuthProvider } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
@@ -11,10 +11,10 @@ import {
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
   PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2,
-  Video, FileType, AlertTriangle, Eye, Edit2 // Added Eye and Edit2
+  Video, FileType, AlertTriangle, Eye, Edit2
 } from 'lucide-react';
 
-// Firebase Storage Imports
+// Firebase Storage
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from "firebase/storage";
 
@@ -53,7 +53,7 @@ export default function Dashboard() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [shareOptions, setShareOptions] = useState({ video: true, notes: true, ppt: true });
   
-  // ✅ NEW: Hidden File Input Ref for Replacing PPT
+  // Hidden Input for Replacing PPT
   const replaceFileRef = useRef(null);
 
   const router = useRouter();
@@ -86,23 +86,23 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ THUMBNAIL GENERATOR (Legacy Build + Worker Fix)
+  // ✅ FIXED THUMBNAIL GENERATOR (Client Side Safe)
   const generateThumbnail = async (file) => {
     if (typeof window === "undefined") return null;
 
     try {
+      // Use Legacy Build for compatibility
       const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`; // Using CDN for worker
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
       const fileUrl = URL.createObjectURL(file);
       const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
       const page = await pdf.getPage(1); // Page 1
 
-      const viewport = page.getViewport({ scale: 1.25 });
+      const viewport = page.getViewport({ scale: 1.5 });
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
-
       canvas.width = viewport.width;
       canvas.height = viewport.height;
 
@@ -110,6 +110,7 @@ export default function Dashboard() {
 
       const thumbnail = canvas.toDataURL("image/jpeg", 0.85);
       URL.revokeObjectURL(fileUrl);
+
       return thumbnail;
     } catch (err) {
       console.error("PDF thumbnail failed:", err);
@@ -208,9 +209,11 @@ export default function Dashboard() {
 
   // --- ACTIONS ---
   
+  // DELETE ACTION
   const handleDeleteMeeting = async () => {
     setLoading(true);
     try {
+        // A. Delete from Google Calendar
         if (formData.googleEventId) {
             let token = sessionStorage.getItem('google_access_token');
             if (!token) {
@@ -218,31 +221,50 @@ export default function Dashboard() {
                 token = GoogleAuthProvider.credentialFromResult(result).accessToken;
                 sessionStorage.setItem('google_access_token', token);
             }
+            
             await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
-                method: "DELETE", headers: { "Authorization": `Bearer ${token}` }
+                method: "DELETE",
+                headers: { "Authorization": `Bearer ${token}` }
             });
         }
+
+        // B. Delete Files from Firebase
         try {
             const folderRef = ref(storage, `meetings/${currentMeetingId}`);
             const listRes = await listAll(folderRef);
             await Promise.all(listRes.items.map((item) => deleteObject(item)));
         } catch(e) { console.log("Firebase cleanup skipped", e); }
 
+        // C. Delete from MongoDB
         await axios.delete(`/api/meetings?id=${currentMeetingId}`);
+
         setShowDeleteModal(false);
         setView('list');
         fetchMeetings(user.uid);
-        alert("Meeting cancelled and deleted successfully. Attendees notified.");
-    } catch (error) { console.error(error); alert("Delete error: " + error.message); }
+        alert("Meeting cancelled and deleted successfully.");
+
+    } catch (error) {
+        console.error(error);
+        alert("Delete error: " + error.message);
+    }
     setLoading(false);
   };
 
   const handleNextStep1 = async () => {
     if (!formData.title || !formData.startTime || !formData.endTime) { alert("Required fields missing."); return; }
     setLoading(true);
+    
+    // Create Calendar Event
     const result = await createGoogleCalendarEvent(formData);
     if (!result) { setLoading(false); return; }
-    const meetingData = { ...formData, userId: user.uid, meetingLink: result.link, googleEventId: result.id };
+
+    const meetingData = { 
+        ...formData, 
+        userId: user.uid, 
+        meetingLink: result.link, 
+        googleEventId: result.id 
+    };
+
     try {
       let res;
       if (!currentMeetingId) {
@@ -262,15 +284,21 @@ export default function Dashboard() {
     newOptions[index] = value;
     setPollOptions(newOptions);
   };
-  const addPollOptionField = () => setPollOptions([...pollOptions, '']);
+
+  const addPollOptionField = () => {
+    setPollOptions([...pollOptions, '']);
+  };
+
   const savePollToLocal = () => {
     if (!pollQuestion.trim()) return alert("Enter question");
     const validOptions = pollOptions.filter(opt => opt.trim() !== "");
     if (validOptions.length < 2) return alert("Need 2+ options");
+
     const newPoll = { question: pollQuestion, options: validOptions };
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
     setPollQuestion(''); setPollOptions(['', '']);
   };
+
   const deletePoll = (index) => {
     const newPolls = [...formData.polls];
     newPolls.splice(index, 1);
@@ -282,30 +310,38 @@ export default function Dashboard() {
     if (!currentMeetingId) return;
     setUploading(true);
     
-    try {
-      let uploadedUrl = "";
-      let uploadedName = "";
-      let thumbnailUrl = "";
+    let uploadedUrl = "";
+    let uploadedName = "";
+    let thumbnailUrl = "";
 
+    try {
       if (pptFile) {
+        // Generate Thumbnail
         thumbnailUrl = await generateThumbnail(pptFile);
-        setPptPreview(thumbnailUrl);
+        if (thumbnailUrl) setPptPreview(thumbnailUrl);
+
+        // Upload File
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
-        await uploadBytes(fileRef, pptFile);
-        uploadedUrl = await getDownloadURL(fileRef);
+        const snapshot = await uploadBytes(fileRef, pptFile);
+        uploadedUrl = await getDownloadURL(snapshot.ref);
         uploadedName = pptFile.name;
       }
 
       await axios.put('/api/meetings', { 
-        id: currentMeetingId, polls: formData.polls, pptUrl: uploadedUrl, pptName: uploadedName, pptThumbnail: thumbnailUrl 
+        id: currentMeetingId, 
+        polls: formData.polls, 
+        pptUrl: uploadedUrl, 
+        pptName: uploadedName, 
+        pptThumbnail: thumbnailUrl 
       });
+      
       setFormData(prev => ({...prev, pptUrl: uploadedUrl, pptName: uploadedName, pptThumbnail: thumbnailUrl }));
       setStep(3);
     } catch (e) { console.error(e); alert("Upload failed: " + e.message); }
     setUploading(false);
   };
 
-  // ✅ NEW: REPLACE PPT FUNCTION (For Detail View)
+  // ✅ NEW: REPLACE PPT FUNCTION (Fixed with Thumbnail Generation)
   const handleReplacePPT = async (e) => {
     const file = e.target.files[0];
     if (!file || !currentMeetingId) return;
@@ -314,15 +350,22 @@ export default function Dashboard() {
     
     try {
         console.log("Replacing PPT...");
-        // 1. Generate New Thumbnail
+
+        // 1. Delete Old File (Cleanup)
+        if (formData.pptName) {
+            const oldRef = ref(storage, `meetings/${currentMeetingId}/${formData.pptName}`);
+            await deleteObject(oldRef).catch(() => console.log("Old file not found"));
+        }
+
+        // 2. Generate New Thumbnail
         const thumbnailUrl = await generateThumbnail(file);
         
-        // 2. Upload New File
+        // 3. Upload New File
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${file.name}`);
         await uploadBytes(fileRef, file);
         const uploadedUrl = await getDownloadURL(fileRef);
 
-        // 3. Update MongoDB
+        // 4. Update MongoDB
         await axios.put('/api/meetings', {
             id: currentMeetingId,
             pptUrl: uploadedUrl,
@@ -330,12 +373,12 @@ export default function Dashboard() {
             pptThumbnail: thumbnailUrl
         });
 
-        // 4. Update Local State
+        // 5. Update Local State (Immediate UI Feedback)
         setFormData(prev => ({
             ...prev,
             pptUrl: uploadedUrl,
             pptName: file.name,
-            pptThumbnail: thumbnailUrl
+            pptThumbnail: thumbnailUrl // ✅ This updates the UI immediately
         }));
         
         alert("Presentation updated successfully!");
@@ -542,7 +585,7 @@ export default function Dashboard() {
                             <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
                         </div>
 
-                        {/* ✅ PREMIUM ASSET CARD WITH ACTIONS */}
+                        {/* ✅ PREMIUM ASSET CARD */}
                         <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg group relative">
                             {/* Hidden Input for Replace */}
                             <input type="file" accept="application/pdf" ref={replaceFileRef} className="hidden" onChange={handleReplacePPT} />
@@ -592,7 +635,9 @@ export default function Dashboard() {
                                         <label className="text-xs text-zinc-500 uppercase font-semibold tracking-wider mb-1 block">Video Link</label>
                                         <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg border border-zinc-800">
                                             <Video size={16} className="text-green-500"/>
-                                            <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">{formData.meetingLink.replace('https://', '')}</a>
+                                            <a href={formData.meetingLink} target="_blank" className="text-sm text-green-400 hover:underline truncate flex-1 block">
+                                                {formData.meetingLink.replace('https://', '')}
+                                            </a>
                                             <button onClick={() => copyText(formData.meetingLink)} className="text-zinc-400 hover:text-white"><Copy size={14}/></button>
                                         </div>
                                     </div>
