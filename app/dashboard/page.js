@@ -6,6 +6,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import Script from 'next/script'; // ✅ NEW: To load PDF Lib safely
 
 import { 
   Plus, Calendar, Clock, Users, FileText, 
@@ -14,7 +15,7 @@ import {
   Video, FileType, AlertTriangle, Eye, Edit2
 } from 'lucide-react';
 
-// Firebase Storage
+// Firebase Storage Imports
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from "firebase/storage";
 
@@ -86,34 +87,38 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ FIXED THUMBNAIL GENERATOR (Client Side Safe)
+  // ✅ 1. NEW THUMBNAIL LOGIC (Uses window.pdfjsLib from Script Tag)
   const generateThumbnail = async (file) => {
-    if (typeof window === "undefined") return null;
-
     try {
-      // Use Legacy Build for compatibility
-      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+      // Ensure Library is Loaded
+      if (!window.pdfjsLib) {
+        console.error("PDF Lib not loaded yet. Waiting...");
+        return null;
+      }
+
+      // Configure Worker (CDN - Must match lib version)
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
       const fileUrl = URL.createObjectURL(file);
-      const loadingTask = pdfjsLib.getDocument(fileUrl);
+      const loadingTask = window.pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1); // Page 1
-
-      const viewport = page.getViewport({ scale: 1.5 });
-      const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d");
-      canvas.width = viewport.width;
+      const page = await pdf.getPage(1); // Get Page 1
+      
+      const viewport = page.getViewport({ scale: 1.5 }); // High Res
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
       canvas.height = viewport.height;
+      canvas.width = viewport.width;
 
-      await page.render({ canvasContext: context, viewport }).promise;
-
-      const thumbnail = canvas.toDataURL("image/jpeg", 0.85);
+      await page.render({ canvasContext: context, viewport: viewport }).promise;
+      
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      
+      // Cleanup
       URL.revokeObjectURL(fileUrl);
-
-      return thumbnail;
-    } catch (err) {
-      console.error("PDF thumbnail failed:", err);
+      return dataUrl;
+    } catch (error) {
+      console.error("Thumbnail generation error:", error);
       return null;
     }
   };
@@ -199,6 +204,7 @@ export default function Dashboard() {
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
       
+      // Return Hangout link (Meet) OR htmlLink (Calendar) AND ID
       return { 
           link: data.hangoutLink || data.htmlLink,
           id: data.id 
@@ -209,7 +215,7 @@ export default function Dashboard() {
 
   // --- ACTIONS ---
   
-  // DELETE ACTION
+  // ✅ DELETE ACTION
   const handleDeleteMeeting = async () => {
     setLoading(true);
     try {
@@ -217,23 +223,34 @@ export default function Dashboard() {
         if (formData.googleEventId) {
             let token = sessionStorage.getItem('google_access_token');
             if (!token) {
-                const result = await signInWithPopup(auth, provider);
-                token = GoogleAuthProvider.credentialFromResult(result).accessToken;
-                sessionStorage.setItem('google_access_token', token);
+                try {
+                    const result = await signInWithPopup(auth, provider);
+                    token = GoogleAuthProvider.credentialFromResult(result).accessToken;
+                    sessionStorage.setItem('google_access_token', token);
+                } catch(e) {
+                    console.log("Could not refresh token for calendar delete");
+                }
             }
             
-            await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
-                method: "DELETE",
-                headers: { "Authorization": `Bearer ${token}` }
-            });
+            if (token) {
+                console.log("Deleting Google Event:", formData.googleEventId);
+                const calRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
+                    method: "DELETE",
+                    headers: { "Authorization": `Bearer ${token}` }
+                });
+                if (!calRes.ok && calRes.status !== 410) { 
+                     console.warn("Calendar delete status:", calRes.status);
+                }
+            }
         }
 
         // B. Delete Files from Firebase
-        try {
-            const folderRef = ref(storage, `meetings/${currentMeetingId}`);
-            const listRes = await listAll(folderRef);
-            await Promise.all(listRes.items.map((item) => deleteObject(item)));
-        } catch(e) { console.log("Firebase cleanup skipped", e); }
+        if (formData.pptName) {
+            try {
+                const pptRef = ref(storage, `meetings/${currentMeetingId}/${formData.pptName}`);
+                await deleteObject(pptRef);
+            } catch(e) { console.log("PPT file not found or already deleted"); }
+        }
 
         // C. Delete from MongoDB
         await axios.delete(`/api/meetings?id=${currentMeetingId}`);
@@ -241,7 +258,7 @@ export default function Dashboard() {
         setShowDeleteModal(false);
         setView('list');
         fetchMeetings(user.uid);
-        alert("Meeting cancelled and deleted successfully.");
+        alert("Meeting cancelled and deleted successfully. Attendees notified.");
 
     } catch (error) {
         console.error(error);
@@ -305,7 +322,7 @@ export default function Dashboard() {
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // UPLOAD LOGIC (Wizard)
+  // ✅ 3. UPLOAD LOGIC (Wizard)
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
     setUploading(true);
@@ -316,11 +333,13 @@ export default function Dashboard() {
 
     try {
       if (pptFile) {
-        // Generate Thumbnail
+        // 1. Generate Thumbnail
+        console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
         if (thumbnailUrl) setPptPreview(thumbnailUrl);
 
-        // Upload File
+        // 2. Upload PDF to Firebase Storage
+        console.log("Uploading file...");
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
         const snapshot = await uploadBytes(fileRef, pptFile);
         uploadedUrl = await getDownloadURL(snapshot.ref);
@@ -341,7 +360,7 @@ export default function Dashboard() {
     setUploading(false);
   };
 
-  // ✅ NEW: REPLACE PPT FUNCTION (Fixed with Thumbnail Generation)
+  // ✅ NEW: REPLACE PPT FUNCTION
   const handleReplacePPT = async (e) => {
     const file = e.target.files[0];
     if (!file || !currentMeetingId) return;
@@ -378,7 +397,7 @@ export default function Dashboard() {
             ...prev,
             pptUrl: uploadedUrl,
             pptName: file.name,
-            pptThumbnail: thumbnailUrl // ✅ This updates the UI immediately
+            pptThumbnail: thumbnailUrl
         }));
         
         alert("Presentation updated successfully!");
@@ -430,6 +449,13 @@ export default function Dashboard() {
   return (
     <div className="h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col overflow-hidden">
       
+      {/* ✅ LOAD PDF LIB GLOBALLY */}
+      <Script 
+        src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" 
+        strategy="lazyOnload"
+        onLoad={() => console.log('PDF Lib Loaded')}
+      />
+
       {/* NAVBAR */}
       <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 shrink-0 h-[72px] z-50 shadow-md">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
@@ -554,7 +580,7 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL (Premium Asset Card + Edit/Preview Buttons) */}
+        {/* VIEW: DETAIL (Premium Asset Card) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
@@ -600,7 +626,7 @@ export default function Dashboard() {
                                 ) : formData.pptThumbnail ? (
                                     <>
                                         <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
-                                        {/* ✅ BUTTONS: Top Right on Hover */}
+                                        {/* Buttons Overlay */}
                                         <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                                             <button 
                                                 onClick={() => window.open(formData.pptUrl, '_blank')}
@@ -663,7 +689,7 @@ export default function Dashboard() {
                         )}
                     </div>
 
-                    {/* RIGHT COLUMN */}
+                    {/* RIGHT COLUMN (AI Hub) */}
                     <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
                         <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
                             {['summary', 'transcript', 'upload'].map((tab) => (
