@@ -1,20 +1,20 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react'; // Added useRef
 import { auth, provider, signInWithPopup, GoogleAuthProvider } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import Script from 'next/script'; // ✅ NEW: Load PDF Lib safely
 
 import { 
   Plus, Calendar, Clock, Users, FileText, 
   Upload, CheckCircle2, LogOut, 
   PlayCircle, Share2, X, Link as LinkIcon, Mic, Copy, ArrowLeft, Radio, Search, Download, Trash2,
-  Video, FileType, AlertTriangle
+  Video, FileType, AlertTriangle, Eye, Edit2 // Added Eye and Edit2
 } from 'lucide-react';
 
+// Firebase Storage Imports
 import { storage } from '@/lib/firebase';
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from "firebase/storage";
 
@@ -48,10 +48,13 @@ export default function Dashboard() {
   const [summary, setSummary] = useState('');
   const [transcriptSearch, setTranscriptSearch] = useState('');
 
-  // Modals
+  // Modals & Refs
   const [showShareModal, setShowShareModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [shareOptions, setShareOptions] = useState({ video: true, notes: true, ppt: true });
+  
+  // ✅ NEW: Hidden File Input Ref for Replacing PPT
+  const replaceFileRef = useRef(null);
 
   const router = useRouter();
 
@@ -83,38 +86,33 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ 1. NEW THUMBNAIL LOGIC (Uses window.pdfjsLib)
+  // ✅ THUMBNAIL GENERATOR (Legacy Build + Worker Fix)
   const generateThumbnail = async (file) => {
-    try {
-      // Ensure Library is Loaded
-      if (!window.pdfjsLib) {
-        console.error("PDF Lib not loaded yet");
-        return null;
-      }
+    if (typeof window === "undefined") return null;
 
-      // Configure Worker (CDN)
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+    try {
+      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`; // Using CDN for worker
 
       const fileUrl = URL.createObjectURL(file);
-      const loadingTask = window.pdfjsLib.getDocument(fileUrl);
+      const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
       const page = await pdf.getPage(1); // Page 1
-      
-      const viewport = page.getViewport({ scale: 1.5 }); // High Res
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d');
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
 
-      await page.render({ canvasContext: context, viewport: viewport }).promise;
-      
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      
-      // Cleanup
+      const viewport = page.getViewport({ scale: 1.25 });
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({ canvasContext: context, viewport }).promise;
+
+      const thumbnail = canvas.toDataURL("image/jpeg", 0.85);
       URL.revokeObjectURL(fileUrl);
-      return dataUrl;
-    } catch (error) {
-      console.error("Thumbnail generation error:", error);
+      return thumbnail;
+    } catch (err) {
+      console.error("PDF thumbnail failed:", err);
       return null;
     }
   };
@@ -200,7 +198,6 @@ export default function Dashboard() {
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
       
-      // Return Hangout link (Meet) OR htmlLink (Calendar) AND ID
       return { 
           link: data.hangoutLink || data.htmlLink,
           id: data.id 
@@ -211,76 +208,41 @@ export default function Dashboard() {
 
   // --- ACTIONS ---
   
-  // ✅ 2. DELETE ACTION (Fixed Calendar Logic)
   const handleDeleteMeeting = async () => {
     setLoading(true);
     try {
-        // A. Delete from Google Calendar
         if (formData.googleEventId) {
             let token = sessionStorage.getItem('google_access_token');
-            // If token missing, refresh it
             if (!token) {
-                try {
-                    const result = await signInWithPopup(auth, provider);
-                    token = GoogleAuthProvider.credentialFromResult(result).accessToken;
-                    sessionStorage.setItem('google_access_token', token);
-                } catch(e) {
-                    console.log("Could not refresh token for calendar delete");
-                }
+                const result = await signInWithPopup(auth, provider);
+                token = GoogleAuthProvider.credentialFromResult(result).accessToken;
+                sessionStorage.setItem('google_access_token', token);
             }
-            
-            if (token) {
-                console.log("Deleting Google Event:", formData.googleEventId);
-                // The 'sendUpdates=all' triggers the cancellation email
-                const calRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
-                    method: "DELETE",
-                    headers: { "Authorization": `Bearer ${token}` }
-                });
-                if (!calRes.ok && calRes.status !== 410) { // 410 means already deleted
-                     console.warn("Calendar delete status:", calRes.status);
-                }
-            }
+            await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
+                method: "DELETE", headers: { "Authorization": `Bearer ${token}` }
+            });
         }
+        try {
+            const folderRef = ref(storage, `meetings/${currentMeetingId}`);
+            const listRes = await listAll(folderRef);
+            await Promise.all(listRes.items.map((item) => deleteObject(item)));
+        } catch(e) { console.log("Firebase cleanup skipped", e); }
 
-        // B. Delete Files from Firebase
-        if (formData.pptName) {
-            try {
-                // Try deleting specific files first to avoid permission issues on folder listing
-                const pptRef = ref(storage, `meetings/${currentMeetingId}/${formData.pptName}`);
-                await deleteObject(pptRef);
-            } catch(e) { console.log("PPT file not found or already deleted"); }
-        }
-
-        // C. Delete from MongoDB
         await axios.delete(`/api/meetings?id=${currentMeetingId}`);
-
         setShowDeleteModal(false);
         setView('list');
         fetchMeetings(user.uid);
         alert("Meeting cancelled and deleted successfully. Attendees notified.");
-
-    } catch (error) {
-        console.error(error);
-        alert("Delete error: " + error.message);
-    }
+    } catch (error) { console.error(error); alert("Delete error: " + error.message); }
     setLoading(false);
   };
 
   const handleNextStep1 = async () => {
     if (!formData.title || !formData.startTime || !formData.endTime) { alert("Required fields missing."); return; }
     setLoading(true);
-    
-    // Create Calendar Event
     const result = await createGoogleCalendarEvent(formData);
     if (!result) { setLoading(false); return; }
-
-    const meetingData = { 
-        ...formData, 
-        userId: user.uid, 
-        meetingLink: result.link, 
-        googleEventId: result.id 
-    };
-
+    const meetingData = { ...formData, userId: user.uid, meetingLink: result.link, googleEventId: result.id };
     try {
       let res;
       if (!currentMeetingId) {
@@ -300,65 +262,87 @@ export default function Dashboard() {
     newOptions[index] = value;
     setPollOptions(newOptions);
   };
-
-  const addPollOptionField = () => {
-    setPollOptions([...pollOptions, '']);
-  };
-
+  const addPollOptionField = () => setPollOptions([...pollOptions, '']);
   const savePollToLocal = () => {
     if (!pollQuestion.trim()) return alert("Enter question");
     const validOptions = pollOptions.filter(opt => opt.trim() !== "");
     if (validOptions.length < 2) return alert("Need 2+ options");
-
     const newPoll = { question: pollQuestion, options: validOptions };
     setFormData({ ...formData, polls: [...formData.polls, newPoll] });
     setPollQuestion(''); setPollOptions(['', '']);
   };
-
   const deletePoll = (index) => {
     const newPolls = [...formData.polls];
     newPolls.splice(index, 1);
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // ✅ 3. UPLOAD LOGIC (Uses new generateThumbnail)
+  // UPLOAD LOGIC (Wizard)
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
     setUploading(true);
     
-    let uploadedUrl = "";
-    let uploadedName = "";
-    let thumbnailUrl = "";
-
     try {
-      if (pptFile) {
-        // 1. Generate Thumbnail
-        console.log("Generating thumbnail...");
-        thumbnailUrl = await generateThumbnail(pptFile);
-        if (thumbnailUrl) setPptPreview(thumbnailUrl);
+      let uploadedUrl = "";
+      let uploadedName = "";
+      let thumbnailUrl = "";
 
-        // 2. Upload PDF to Firebase Storage
-        console.log("Uploading file...");
+      if (pptFile) {
+        thumbnailUrl = await generateThumbnail(pptFile);
+        setPptPreview(thumbnailUrl);
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
-        const snapshot = await uploadBytes(fileRef, pptFile);
-        uploadedUrl = await getDownloadURL(snapshot.ref);
+        await uploadBytes(fileRef, pptFile);
+        uploadedUrl = await getDownloadURL(fileRef);
         uploadedName = pptFile.name;
       }
 
-      // 3. Save ALL data to MongoDB
       await axios.put('/api/meetings', { 
-        id: currentMeetingId, 
-        polls: formData.polls, 
-        pptUrl: uploadedUrl,
-        pptName: uploadedName,
-        pptThumbnail: thumbnailUrl 
+        id: currentMeetingId, polls: formData.polls, pptUrl: uploadedUrl, pptName: uploadedName, pptThumbnail: thumbnailUrl 
       });
-      
       setFormData(prev => ({...prev, pptUrl: uploadedUrl, pptName: uploadedName, pptThumbnail: thumbnailUrl }));
       setStep(3);
-    } catch (e) { 
-        console.error(e);
-        alert("Upload failed: " + e.message); 
+    } catch (e) { console.error(e); alert("Upload failed: " + e.message); }
+    setUploading(false);
+  };
+
+  // ✅ NEW: REPLACE PPT FUNCTION (For Detail View)
+  const handleReplacePPT = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !currentMeetingId) return;
+    
+    setUploading(true);
+    
+    try {
+        console.log("Replacing PPT...");
+        // 1. Generate New Thumbnail
+        const thumbnailUrl = await generateThumbnail(file);
+        
+        // 2. Upload New File
+        const fileRef = ref(storage, `meetings/${currentMeetingId}/${file.name}`);
+        await uploadBytes(fileRef, file);
+        const uploadedUrl = await getDownloadURL(fileRef);
+
+        // 3. Update MongoDB
+        await axios.put('/api/meetings', {
+            id: currentMeetingId,
+            pptUrl: uploadedUrl,
+            pptName: file.name,
+            pptThumbnail: thumbnailUrl
+        });
+
+        // 4. Update Local State
+        setFormData(prev => ({
+            ...prev,
+            pptUrl: uploadedUrl,
+            pptName: file.name,
+            pptThumbnail: thumbnailUrl
+        }));
+        
+        alert("Presentation updated successfully!");
+
+    } catch (error) {
+        console.error("Replace failed:", error);
+        alert("Failed to replace PPT.");
     }
     setUploading(false);
   };
@@ -377,9 +361,7 @@ export default function Dashboard() {
       sumData.append("text", transRes.data.text);
       const sumRes = await axios.post('/api/groq/process', sumData);
       
-      const rawSummary = sumRes.data.summary; 
-      const displaySummary = cleanSummaryForDisplay(rawSummary);
-
+      const displaySummary = cleanSummaryForDisplay(sumRes.data.summary);
       setTranscription(transRes.data.text);
       setSummary(displaySummary);
 
@@ -405,13 +387,6 @@ export default function Dashboard() {
   return (
     <div className="h-screen bg-black text-white font-sans selection:bg-green-500 selection:text-white flex flex-col overflow-hidden">
       
-      {/* ✅ LOAD PDF LIB GLOBALLY */}
-      <Script 
-        src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" 
-        strategy="lazyOnload"
-        onLoad={() => console.log('PDF Lib Loaded')}
-      />
-
       {/* NAVBAR */}
       <nav className="border-b border-white/10 px-8 py-4 flex justify-between items-center bg-zinc-950 shrink-0 h-[72px] z-50 shadow-md">
         <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition" onClick={() => { setView('list'); setStep(1); }}>
@@ -443,7 +418,7 @@ export default function Dashboard() {
                     return (
                     <div key={m._id} onClick={() => { 
                         setFormData(m); 
-                        setPptPreview(m.pptThumbnail); 
+                        setPptPreview(m.pptThumbnail || null); 
                         setCurrentMeetingId(m._id); 
                         setTranscription(m.transcription || ''); 
                         setSummary(cleanSummaryForDisplay(m.summary) || ''); 
@@ -536,10 +511,11 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL */}
+        {/* VIEW: DETAIL (Premium Asset Card + Edit/Preview Buttons) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
+                {/* Header */}
                 <div className="flex justify-between items-start border-b border-white/10 pb-6 shrink-0">
                     <div>
                         <button onClick={() => setView('list')} className="mb-2 text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"><ArrowLeft size={14}/> Back to List</button>
@@ -558,21 +534,58 @@ export default function Dashboard() {
                 </div>
 
                 <div className="grid grid-cols-12 gap-8 mt-6 flex-1 min-h-0">
+                    {/* LEFT COLUMN */}
                     <div className="col-span-4 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
+                        
                         <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
                             <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Agenda</h3>
                             <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{formData.description || "No agenda provided."}</p>
                         </div>
 
-                        {/* Premium Asset Card */}
-                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
-                            <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
-                                {formData.pptThumbnail ? (
-                                    <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
+                        {/* ✅ PREMIUM ASSET CARD WITH ACTIONS */}
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg group relative">
+                            {/* Hidden Input for Replace */}
+                            <input type="file" accept="application/pdf" ref={replaceFileRef} className="hidden" onChange={handleReplacePPT} />
+
+                            {/* 1. Thumbnail Image */}
+                            <div className="relative h-48 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
+                                {uploading ? (
+                                    <div className="flex flex-col items-center">
+                                        <div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                                        <span className="text-xs text-green-400">Updating...</span>
+                                    </div>
+                                ) : formData.pptThumbnail ? (
+                                    <>
+                                        <img src={formData.pptThumbnail} className="h-full w-full object-cover opacity-80" alt="Slide Preview" />
+                                        {/* ✅ BUTTONS: Top Right on Hover */}
+                                        <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                            <button 
+                                                onClick={() => window.open(formData.pptUrl, '_blank')}
+                                                className="p-2 bg-black/60 hover:bg-black/90 text-white rounded-full backdrop-blur-md border border-white/10 transition"
+                                                title="Preview"
+                                            >
+                                                <Eye size={16}/>
+                                            </button>
+                                            <button 
+                                                onClick={() => replaceFileRef.current.click()}
+                                                className="p-2 bg-black/60 hover:bg-black/90 text-white rounded-full backdrop-blur-md border border-white/10 transition"
+                                                title="Replace PPT"
+                                            >
+                                                <Edit2 size={16}/>
+                                            </button>
+                                        </div>
+                                    </>
                                 ) : (
-                                    <div className="flex flex-col items-center text-zinc-600 gap-2"><FileText size={32}/><span className="text-xs">No Preview</span></div>
+                                    <div className="flex flex-col items-center text-zinc-600 gap-2">
+                                        <FileText size={32}/>
+                                        <span className="text-xs">No Preview</span>
+                                        {/* Upload button if empty */}
+                                        <button onClick={() => replaceFileRef.current.click()} className="mt-2 text-xs bg-zinc-800 px-3 py-1 rounded border border-zinc-700 hover:text-white">Upload PPT</button>
+                                    </div>
                                 )}
                             </div>
+
+                            {/* 2. File Details */}
                             <div className="p-5 space-y-4">
                                 {formData.meetingLink && (
                                     <div>
@@ -596,6 +609,7 @@ export default function Dashboard() {
                             </div>
                         </div>
 
+                        {/* Polls */}
                         {formData.polls && formData.polls.length > 0 && (
                             <div className="bg-zinc-900/50 border border-white/10 p-6 rounded-2xl">
                                 <h3 className="font-semibold mb-4 text-white/80 uppercase text-xs tracking-wider border-b border-white/5 pb-2">Polls Results</h3>
@@ -604,6 +618,7 @@ export default function Dashboard() {
                         )}
                     </div>
 
+                    {/* RIGHT COLUMN */}
                     <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
                         <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
                             {['summary', 'transcript', 'upload'].map((tab) => (
