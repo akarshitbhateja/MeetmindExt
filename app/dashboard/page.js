@@ -83,42 +83,41 @@ export default function Dashboard() {
 
   // --- UTILS ---
   
-  // ✅ 1. FIXED THUMBNAIL GENERATOR (Legacy Build + Worker Fix)
+  // ✅ 1. FIXED THUMBNAIL GENERATOR (Uses Legacy Build for Next.js Compatibility)
   const generateThumbnail = async (file) => {
     if (typeof window === "undefined") return null;
 
     try {
-      // ✅ USE LEGACY BUILD (THIS IS THE FIX)
-      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf");
+      // 1. Dynamic Import of Legacy Build (Stable)
+      const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf');
+      
+      // 2. Set Worker to exact version match from UNPKG
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/legacy/build/pdf.worker.min.js`;
 
-      // ✅ CORRECT WORKER SETUP FOR NEXT.JS
-      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-        "pdfjs-dist/legacy/build/pdf.worker.min.js",
-        import.meta.url
-      ).toString();
-
+      // 3. Load Document
       const fileUrl = URL.createObjectURL(file);
       const loadingTask = pdfjsLib.getDocument(fileUrl);
       const pdf = await loadingTask.promise;
-
-      const page = await pdf.getPage(1);
-
-      const viewport = page.getViewport({ scale: 1.25 });
-      const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d");
-
-      canvas.width = viewport.width;
+      const page = await pdf.getPage(1); // Page 1
+      
+      // 4. Render to Canvas
+      const viewport = page.getViewport({ scale: 1.0 });
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
       canvas.height = viewport.height;
+      canvas.width = viewport.width;
 
-      await page.render({ canvasContext: context, viewport }).promise;
-
-      const thumbnail = canvas.toDataURL("image/jpeg", 0.85);
-
+      await page.render({ canvasContext: context, viewport: viewport }).promise;
+      
+      // 5. Export Image
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      
+      // Cleanup
       URL.revokeObjectURL(fileUrl);
-
-      return thumbnail;
-    } catch (err) {
-      console.error("PDF thumbnail failed:", err);
+      
+      return dataUrl;
+    } catch (error) {
+      console.error("Thumbnail generation failed:", error);
       return null;
     }
   };
@@ -204,6 +203,7 @@ export default function Dashboard() {
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
       
+      // Return Hangout link (Meet) OR htmlLink (Calendar) AND ID
       return { 
           link: data.hangoutLink || data.htmlLink,
           id: data.id 
@@ -214,23 +214,31 @@ export default function Dashboard() {
 
   // --- ACTIONS ---
   
-  // ✅ 2. DELETE ACTION
+  // ✅ 2. FIXED DELETE ACTION
   const handleDeleteMeeting = async () => {
     setLoading(true);
     try {
-        // A. Delete from Google Calendar
+        // A. Delete from Google Calendar (Requires Valid Token)
         if (formData.googleEventId) {
             let token = sessionStorage.getItem('google_access_token');
+            // Check if token exists, if not, ask for permission again
             if (!token) {
+                console.log("Token missing for delete, prompting user...");
                 const result = await signInWithPopup(auth, provider);
                 token = GoogleAuthProvider.credentialFromResult(result).accessToken;
                 sessionStorage.setItem('google_access_token', token);
             }
             
-            await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
+            console.log("Deleting Google Event:", formData.googleEventId);
+            const calendarRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${formData.googleEventId}?sendUpdates=all`, {
                 method: "DELETE",
                 headers: { "Authorization": `Bearer ${token}` }
             });
+
+            if (!calendarRes.ok) {
+                console.warn("Google Calendar Delete Warning:", await calendarRes.text());
+                // We continue deleting from DB even if Calendar fails (to avoid zombie records)
+            }
         }
 
         // B. Delete Files from Firebase
@@ -246,7 +254,7 @@ export default function Dashboard() {
         setShowDeleteModal(false);
         setView('list');
         fetchMeetings(user.uid);
-        alert("Meeting deleted successfully. Cancellation sent.");
+        alert("Meeting cancelled and deleted successfully.");
 
     } catch (error) {
         console.error(error);
@@ -259,7 +267,6 @@ export default function Dashboard() {
     if (!formData.title || !formData.startTime || !formData.endTime) { alert("Required fields missing."); return; }
     setLoading(true);
     
-    // Create Calendar Event
     const result = await createGoogleCalendarEvent(formData);
     if (!result) { setLoading(false); return; }
 
@@ -310,29 +317,23 @@ export default function Dashboard() {
     setFormData({ ...formData, polls: newPolls });
   };
 
-  // ✅ 3. UPLOAD LOGIC
+  // ✅ 3. UPLOAD LOGIC: Generate Thumbnail -> Upload -> Save
   const handleNextStep2 = async () => {
     if (!currentMeetingId) return;
     setUploading(true);
     
-    try {
-      let uploadedUrl = "";
-      let uploadedName = "";
-      let thumbnailUrl = "";
+    let uploadedUrl = "";
+    let uploadedName = "";
+    let thumbnailUrl = "";
 
+    try {
       if (pptFile) {
-        // 1. Generate the thumbnail (using legacy PDF logic)
+        // 1. Generate Thumbnail
         console.log("Generating thumbnail...");
         thumbnailUrl = await generateThumbnail(pptFile);
-        
-        if (thumbnailUrl) {
-            console.log("Thumbnail Generated!");
-            setPptPreview(thumbnailUrl);
-        } else {
-            console.warn("Thumbnail generation failed, continuing without it.");
-        }
+        if (thumbnailUrl) setPptPreview(thumbnailUrl);
 
-        // 2. Upload PDF to Firebase
+        // 2. Upload PDF to Firebase Storage
         console.log("Uploading file...");
         const fileRef = ref(storage, `meetings/${currentMeetingId}/${pptFile.name}`);
         const snapshot = await uploadBytes(fileRef, pptFile);
@@ -340,7 +341,7 @@ export default function Dashboard() {
         uploadedName = pptFile.name;
       }
 
-      // 3. Save to Mongo including thumbnail
+      // 3. Save ALL data to MongoDB
       await axios.put('/api/meetings', { 
         id: currentMeetingId, 
         polls: formData.polls, 
@@ -349,14 +350,7 @@ export default function Dashboard() {
         pptThumbnail: thumbnailUrl 
       });
       
-      // Sync local state
-      setFormData(prev => ({
-        ...prev, 
-        pptUrl: uploadedUrl, 
-        pptName: uploadedName, 
-        pptThumbnail: thumbnailUrl 
-      }));
-      
+      setFormData(prev => ({...prev, pptUrl: uploadedUrl, pptName: uploadedName, pptThumbnail: thumbnailUrl }));
       setStep(3);
     } catch (e) { 
         console.error(e);
@@ -436,16 +430,7 @@ export default function Dashboard() {
                 {meetings.map((m) => {
                     const status = getMeetingStatus(m.startTime, m.endTime);
                     return (
-                    <div key={m._id} onClick={() => { 
-                        // ✅ FIX: Ensure state is synced when opening
-                        setFormData(m); 
-                        setPptPreview(m.pptThumbnail || null); 
-                        setCurrentMeetingId(m._id); 
-                        setTranscription(m.transcription || ''); 
-                        setSummary(cleanSummaryForDisplay(m.summary) || ''); 
-                        setView('detail'); 
-                        setActiveTab(m.summary ? 'summary' : 'upload'); 
-                    }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
+                    <div key={m._id} onClick={() => { setFormData(m); setPptPreview(m.pptThumbnail); setCurrentMeetingId(m._id); setTranscription(m.transcription || ''); setSummary(cleanSummaryForDisplay(m.summary) || ''); setView('detail'); setActiveTab(m.summary ? 'summary' : 'upload'); }} className="bg-zinc-900/50 border border-white/10 p-5 rounded-xl flex items-center justify-between hover:border-green-500/30 transition-colors cursor-pointer group">
                         <div className="flex gap-4 items-center">
                         <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center font-bold text-gray-400 group-hover:text-green-400 group-hover:bg-zinc-800/80 transition-all border border-white/5">{m.title.charAt(0).toUpperCase()}</div>
                         <div><h3 className="font-bold text-lg group-hover:text-green-400 transition-colors">{m.title}</h3><p className="text-sm text-gray-500 flex items-center gap-2"><Calendar size={14} />{m.startTime ? new Date(m.startTime).toLocaleString() : m.date}</p></div>
@@ -496,7 +481,6 @@ export default function Dashboard() {
                             <div className="flex flex-col items-center"><div className="w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-2"></div><span className="text-sm text-green-400">Processing PDF...</span></div>
                         ) : pptPreview ? (
                             <div className="relative w-full h-40 bg-zinc-800 rounded-lg overflow-hidden flex flex-col items-center">
-                                {/* ✅ SHOW GENERATED PREVIEW IMMEDIATELY */}
                                 <img src={pptPreview} alt="Slide 1" className="h-full object-contain" />
                                 <div className="absolute bottom-0 w-full bg-black/70 text-xs p-2 text-center text-white">{pptFile?.name || "Uploaded File"}</div>
                             </div>
@@ -533,7 +517,7 @@ export default function Dashboard() {
            </div>
         )}
 
-        {/* VIEW: DETAIL */}
+        {/* VIEW: DETAIL (Premium Card UI + DELETE BUTTON) */}
         {view === 'detail' && (
           <div className="absolute inset-0 flex flex-col p-8 custom-scrollbar">
              <div className="max-w-7xl mx-auto w-full h-full flex flex-col">
@@ -566,7 +550,7 @@ export default function Dashboard() {
 
                         {/* ✅ PREMIUM ASSET CARD */}
                         <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
-                            {/* 1. Thumbnail Image */}
+                            {/* Thumbnail Image */}
                             <div className="relative h-40 bg-zinc-950 w-full flex items-center justify-center border-b border-zinc-800">
                                 {formData.pptThumbnail ? (
                                     <img 
@@ -583,7 +567,7 @@ export default function Dashboard() {
                                 )}
                             </div>
 
-                            {/* 2. File Details */}
+                            {/* Details */}
                             <div className="p-5 space-y-4">
                                 {formData.meetingLink && (
                                     <div>
@@ -620,7 +604,7 @@ export default function Dashboard() {
                         )}
                     </div>
 
-                    {/* RIGHT COLUMN */}
+                    {/* RIGHT COLUMN (AI Hub) */}
                     <div className="col-span-8 bg-zinc-900/50 border border-white/10 rounded-2xl p-0 overflow-hidden flex flex-col h-[600px]">
                         <div className="flex border-b border-white/10 bg-black/20 px-6 pt-4 shrink-0">
                             {['summary', 'transcript', 'upload'].map((tab) => (
